@@ -200,6 +200,82 @@ app.post("/api/verify-journal", async (req, res) => {
   }
 });
 
+app.post("/api/verify-proof", async (req, res) => {
+  try {
+    const { questTitle, questDesc, proofText } = req.body;
+    if (!questTitle || !proofText) {
+      return res.status(400).json({ error: "Missing quest details or proof proclamation text!" });
+    }
+
+    const systemInstruction = `You are the Kingdom High Archivist, a wise sentinel verifying the traveler's proof of completing their RPG quests.
+    Evaluate the user's written description of proof against the quest title ("${questTitle}") and quest objective/description ("${questDesc || ""}").
+    Identify if they actually completed the quest or if their description is too brief, vague, lazy, or nonsensical.
+    Your evaluation must result in:
+    1. verified: boolean (true if they provided reasonable, realistic evidence of completion; false if it's too short/vague/nonsensical).
+    2. scholarMessage: string (a short, wise medieval fantasy comment explaining your evaluation under 45 words. Speak with medieval/regal tones, using terms like "thy", "deeds", "noble" etc.).
+    Format strictly as JSON with this exact key structure: { "verified": boolean, "scholarMessage": string }`;
+
+    const userPrompt = `Quest: "${questTitle}" (${questDesc || ""})\nTraveler's Written Proof: "${proofText}"`;
+
+    if (process.env.GEMINI_API_KEY) {
+      console.log("Proof verification routed via Gemini API...");
+      const ai = new GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build",
+          },
+        },
+      });
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: userPrompt,
+        config: {
+          systemInstruction: systemInstruction,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              verified: {
+                type: Type.BOOLEAN,
+                description: "True if proof is genuine and detailed, false if insufficient",
+              },
+              scholarMessage: {
+                type: Type.STRING,
+                description: "Wise medieval scholar commentary evaluating the proof",
+              },
+            },
+            required: ["verified", "scholarMessage"],
+          },
+        },
+      });
+
+      const contentText = response.text || "";
+      const jsonMatch = contentText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+         const parsed = JSON.parse(jsonMatch[0]);
+         return res.json(parsed);
+      } else {
+         const parsed = JSON.parse(contentText);
+         return res.json(parsed);
+      }
+    }
+
+    // Default static mock if API key isn't active
+    const isValid = proofText.trim().split(/\s+/).length >= 5;
+    return res.json({
+      verified: isValid,
+      scholarMessage: isValid 
+        ? "Truly a noble deed! Thy written testimonies bear witness of thy stamina and effort. Progression granted."
+        : "Thy text is brief and lacking detail, traveler! Speak more of thy labor that I may vouch for thy soul."
+    });
+  } catch (err) {
+    console.error("Proof grading failure:", err);
+    return res.status(500).json({ error: "The High Archivist's archives are temporarily offline." });
+  }
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

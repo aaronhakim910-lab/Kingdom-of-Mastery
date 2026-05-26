@@ -40,7 +40,9 @@ import {
   Camera,
   Mic,
   Video,
-  FileText
+  FileText,
+  Upload,
+  FileSpreadsheet
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -67,7 +69,8 @@ import {
   onSnapshot,
   serverTimestamp,
   deleteDoc,
-  getDocFromServer
+  getDocFromServer,
+  getDocs
 } from 'firebase/firestore';
 
 // --- Type Declarations ---
@@ -158,6 +161,18 @@ const ENEMIES = [
   { id: 'e3', name: "The Chaos Titan", subName: "Ancient Bane of the Citadel", maxHp: 1000, imageUrl: IMAGES.BOSS, minLevel: 15 },
   { id: 'e4', name: "The Void Archdemon", subName: "Scourge of the Stardust Nebula", maxHp: 1500, imageUrl: voidArchdemonImg, minLevel: 25 },
   { id: 'e5', name: "The Star Devourer", subName: "Cosmic Apex of Infinity", maxHp: 2500, imageUrl: starDevourerImg, minLevel: 40 },
+];
+
+const QUEST_POOL = [
+  { title: "Knowledge Harvest", desc: "Read 20 pages of high density lore", xp: 15, color: "text-blue-400", category: "Mind" },
+  { title: "Original Creation", desc: "Code for 1 hour on thy project scroll", xp: 25, color: "text-amber-400", category: "Skills" },
+  { title: "Warrior Stamina", desc: "Perform 30 pushups to boost physical defense", xp: 15, color: "text-emerald-400", category: "Health" },
+  { title: "Mind Recovery", desc: "Meditate in complete silence for 10 minutes", xp: 10, color: "text-purple-400", category: "Mind" },
+  { title: "Feast Proclamation", desc: "Consume a clean, healthy meal of protein & greens", xp: 15, color: "text-amber-500", category: "Health" },
+  { title: "Hydration Blessing", desc: "Consume 8 draughts of pure spring water", xp: 10, color: "text-sky-400", category: "Health" },
+  { title: "Scribe Reflection", desc: "Write thy daily insights in the scholar journal", xp: 20, color: "text-yellow-400", category: "Mind" },
+  { title: "Arcane Study", desc: "Study 30 minutes of deep technical material", xp: 25, color: "text-indigo-400", category: "Skills" },
+  { title: "Stardust Slumber", desc: "Retire or power off thy screen before 10:30 PM", xp: 15, color: "text-violet-400", category: "Health" }
 ];
 
 const getRankTitle = (level: number) => {
@@ -462,8 +477,9 @@ export default function App() {
 
         // Seed quests
         const defaultQuests = [
-          { id: '1', title: 'Knowledge Harvest', desc: 'Read 20 pages', xp: 15, color: 'text-blue-400', completed: false },
-          { id: '2', title: 'Original Creation', desc: 'Code for 1 hour', xp: 25, color: 'text-amber-400', completed: false }
+          { id: '1', title: 'Knowledge Harvest', desc: 'Read 20 pages of high density lore', xp: 15, color: 'text-blue-400', completed: false, category: 'Mind' },
+          { id: '2', title: 'Original Creation', desc: 'Code for 1 hour on thy project scroll', xp: 25, color: 'text-amber-400', completed: false, category: 'Skills' },
+          { id: '3', title: 'Warrior Stamina', desc: 'Perform 30 pushups to boost physical defense', xp: 15, color: 'text-emerald-400', completed: false, category: 'Health' }
         ];
         for (const q of defaultQuests) {
           const qRef = doc(db, 'profiles', firebaseUser.uid, 'quests', q.id);
@@ -543,8 +559,9 @@ export default function App() {
         setQuests(JSON.parse(savedQuests));
       } else {
         const defaultQuests = [
-          { id: '1', title: 'Knowledge Harvest', desc: 'Read 20 pages', xp: 15, color: 'text-blue-400', completed: false },
-          { id: '2', title: 'Original Creation', desc: 'Code for 1 hour', xp: 25, color: 'text-amber-400', completed: false }
+          { id: '1', title: 'Knowledge Harvest', desc: 'Read 20 pages of high density lore', xp: 15, color: 'text-blue-400', completed: false, category: 'Mind' },
+          { id: '2', title: 'Original Creation', desc: 'Code for 1 hour on thy project scroll', xp: 25, color: 'text-amber-400', completed: false, category: 'Skills' },
+          { id: '3', title: 'Warrior Stamina', desc: 'Perform 30 pushups to boost physical defense', xp: 15, color: 'text-emerald-400', completed: false, category: 'Health' }
         ];
         setQuests(defaultQuests);
         localStorage.setItem('kom_guest_quests', JSON.stringify(defaultQuests));
@@ -855,6 +872,46 @@ export default function App() {
       } catch (err) {
         handleFirestoreError(err, OperationType.UPDATE, `profiles/${user.uid}/quests/${q.id}`);
       }
+    }
+  };
+
+  const handleRefreshQuests = async () => {
+    if (!user) return;
+    
+    // Pick 3 unique random quests from pool
+    const shuffled = [...QUEST_POOL].sort(() => 0.5 - Math.random());
+    const selected = shuffled.slice(0, 3).map((q, index) => ({
+      id: `q_refresh_${Date.now()}_${index}`,
+      title: q.title,
+      desc: q.desc,
+      xp: q.xp,
+      color: q.color,
+      completed: false
+    }));
+
+    if (isGuest) {
+      setQuests(selected);
+      localStorage.setItem('kom_guest_quests', JSON.stringify(selected));
+      return;
+    }
+
+    try {
+      const questsCol = collection(db, 'profiles', user.uid, 'quests');
+      const qSnap = await getDocs(questsCol);
+      
+      const deletePromises = qSnap.docs.map(doc => deleteDoc(doc.ref));
+      await Promise.all(deletePromises);
+
+      const addPromises = selected.map(q => {
+        const qRef = doc(db, 'profiles', user.uid, 'quests', q.id);
+        return setDoc(qRef, {
+          ...q,
+          updatedAt: serverTimestamp()
+        });
+      });
+      await Promise.all(addPromises);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `profiles/${user.uid}/quests`);
     }
   };
 
@@ -1339,6 +1396,7 @@ export default function App() {
                     onAddQuest={handleAddQuest}
                     onDeleteQuest={handleDeleteQuest}
                     onResetQuests={handleResetQuests}
+                    onRefreshQuests={handleRefreshQuests}
                     user={user}
                     profile={profile}
                     isGuest={isGuest}
@@ -1427,6 +1485,7 @@ interface ArenaProps {
   onAddQuest: (title: string, desc: string, xp: number, category?: string) => void;
   onDeleteQuest: (id: string) => void;
   onResetQuests: () => void;
+  onRefreshQuests: () => void | Promise<void>;
   user: any;
   profile: any;
   isGuest: boolean;
@@ -1453,6 +1512,7 @@ function ArenaScreen({
   onAddQuest, 
   onDeleteQuest, 
   onResetQuests,
+  onRefreshQuests,
   user,
   profile,
   isGuest,
@@ -1486,6 +1546,14 @@ function ArenaScreen({
   const [journalStatus, setJournalStatus] = useState('');
   const [journalResult, setJournalResult] = useState<{ grade: string, comment: string, scrollTitle: string } | null>(null);
   const [isGrading, setIsGrading] = useState(false);
+
+  // Proof of Completion states
+  const [selectedProofQuest, setSelectedProofQuest] = useState<Quest | null>(null);
+  const [proofOption, setProofOption] = useState<'photo' | 'written' | null>(null);
+  const [imgUploaded, setImgUploaded] = useState<string | null>(null);
+  const [proofText, setProofText] = useState('');
+  const [loadingProof, setLoadingProof] = useState(false);
+  const [verificationFeedback, setVerificationFeedback] = useState('');
 
   const startCameraScan = async () => {
     try {
@@ -1828,14 +1896,23 @@ function ArenaScreen({
         {/* Daily Quests */}
         <section className="flex flex-col gap-4">
           <div className="flex items-center justify-between border-b border-outline-variant/30 pb-2">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h3 className="font-serif text-lg text-on-surface font-bold">Daily Quests</h3>
               <button 
                 onClick={onResetQuests}
                 title="Reset Completed Quests"
                 className="p-1 rounded hover:bg-surface-container-highest text-on-surface-variant transition-colors"
               >
-                <RefreshCw className="w-3.5 h-3.5" />
+                <RefreshCw className="w-3.5 h-3.5 text-on-surface-variant/70 hover:rotate-90 transition-transform" />
+              </button>
+              
+              <button 
+                onClick={onRefreshQuests}
+                title="Roll 3 New Daily Quests"
+                className="font-mono text-[8px] uppercase font-bold text-amber-400 bg-amber-500/10 border border-amber-500/25 px-2 py-1 rounded inline-flex items-center gap-1 hover:bg-amber-400 hover:text-background transition-colors cursor-pointer"
+              >
+                <Sparkles className="w-2.5 h-2.5" />
+                Roll 3 New Daily
               </button>
             </div>
             <button 
@@ -1900,7 +1977,7 @@ function ArenaScreen({
             )}
           </AnimatePresence>
           
-          <div className="grid gap-4">
+          <div className="grid gap-3.5">
             {quests.length === 0 ? (
               <p className="text-center text-xs text-on-surface-variant/70 py-6">Your quest scroll is currently empty. Summon custom daily habits!</p>
             ) : (
@@ -1908,52 +1985,70 @@ function ArenaScreen({
                 <motion.div 
                   key={quest.id}
                   whileHover={{ scale: 1.01 }}
-                  className={`bg-surface-container rounded-xl p-4 flex items-center gap-4 border transition-colors relative ${quest.completed ? 'border-outline-variant/20 opacity-50' : 'border-outline-variant/30'}`}
+                  className={`bg-surface-container rounded-xl p-3 border.5 transition-colors relative flex flex-col gap-2.5 ${quest.completed ? 'border-outline-variant/20 opacity-60' : 'border-outline-variant/30 bg-gradient-to-r from-surface-container to-surface-container-high'}`}
                 >
-                  <div className="w-11 h-11 rounded-lg bg-surface-container-highest flex items-center justify-center text-tertiary shadow-inner border border-outline-variant/50">
-                    <Sparkles className="w-5 h-5 text-tertiary/70" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <h4 className={`font-mono text-sm font-bold truncate ${quest.completed ? 'line-through text-on-surface-variant' : 'text-on-surface'}`}>{quest.title}</h4>
-                      {quest.completed && (
-                        <span className={`text-[7px] font-mono px-1 py-0.2 rounded ${quest.failed ? 'bg-red-500/20 text-red-500/80' : 'bg-emerald-500/20 text-emerald-400'}`}>
-                          {quest.failed ? 'TUMBLED' : 'VICTORIOUS'}
-                        </span>
-                      )}
+                  {/* Row 1: Category Badge indicator, Title, and Deletion option */}
+                  <div className="flex items-start justify-between gap-2.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${quest.color || 'bg-primary'}`} />
+                      <h4 className={`font-mono text-xs font-bold leading-snug truncate ${quest.completed ? 'line-through text-on-surface-variant/70' : 'text-on-surface'}`}>
+                        {quest.title}
+                      </h4>
                     </div>
-                    <p className="text-xs text-on-surface-variant truncate">{quest.desc || "Daily habit tracking quest."}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {!quest.completed ? (
-                      <div className="flex items-center gap-1">
-                        <button 
-                          onClick={() => onComplete(quest.id, quest.xp)}
-                          title="Succeed habit"
-                          className="bg-emerald-950/40 text-emerald-400 hover:bg-emerald-500 hover:text-background font-mono text-[8px] font-bold uppercase px-2 py-1.5 rounded border border-emerald-500/30 transition-all uppercase active:scale-95 cursor-pointer"
-                        >
-                          Succ
-                        </button>
-                        <button 
-                          onClick={() => onFailQuest(quest.id)}
-                          title="Missed/failed habit"
-                          className="bg-red-950/40 text-red-400 hover:bg-red-500 hover:text-background font-mono text-[8px] font-bold uppercase px-2 py-1.5 rounded border border-red-500/30 transition-all id-fail-quest uppercase active:scale-95 cursor-pointer"
-                        >
-                          Miss
-                        </button>
-                      </div>
-                    ) : (
-                      <span className={`text-[9px] font-bold font-mono ${quest.failed ? 'text-red-400' : 'text-emerald-400'}`}>
-                        {quest.failed ? '💥 DEFEAT' : `+${quest.xp} XP`}
-                      </span>
-                    )}
                     <button 
                       onClick={() => onDeleteQuest(quest.id)}
-                      className="p-2 text-on-surface-variant hover:text-error transition-colors text-on-surface-variant/40 hover:text-red-400"
+                      className="p-1 text-on-surface-variant/40 hover:text-red-400 transition-colors -mt-1 -mr-1"
                       title="Annihilate Quest"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
+                  </div>
+
+                  {/* Row 2: Objective Description / Deliverables */}
+                  <div className="text-[11px] text-on-surface-variant leading-relaxed pl-3.5 border-l-2 border-primary/25 break-words">
+                    {quest.desc || "Daily habit tracking quest."}
+                  </div>
+
+                  {/* Row 3: Reward badges and interactive proof control buttons */}
+                  <div className="flex items-center justify-between pt-1.5 border-t border-outline-variant/10 mt-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[8px] font-mono text-on-surface-variant/50 uppercase tracking-tighter">Reward:</span>
+                      <span className="font-mono text-[9px] font-bold text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
+                        +{quest.xp} XP / 💎
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      {!quest.completed ? (
+                        <>
+                          <button 
+                            onClick={() => {
+                              setSelectedProofQuest(quest);
+                              setProofOption(null);
+                              setImgUploaded(null);
+                              setProofText('');
+                              setVerificationFeedback('');
+                            }}
+                            title="Complete quest (requires verification proof)"
+                            className="bg-emerald-950/40 text-emerald-400 hover:bg-emerald-500 hover:text-background font-mono text-[8.5px] font-bold uppercase px-2.5 py-1 rounded border border-emerald-500/30 transition-all uppercase active:scale-95 cursor-pointer flex items-center gap-1 group"
+                          >
+                            <Sparkles className="w-2.5 h-2.5 text-emerald-450 group-hover:rotate-12 transition-transform" />
+                            Succ
+                          </button>
+                          <button 
+                            onClick={() => onFailQuest(quest.id)}
+                            title="Missed/failed habit"
+                            className="bg-red-950/40 text-red-400 hover:bg-red-500 hover:text-background font-mono text-[8px] font-bold uppercase px-2 py-1 rounded border border-red-500/30 transition-all uppercase active:scale-95 cursor-pointer"
+                          >
+                            Miss
+                          </button>
+                        </>
+                      ) : (
+                        <span className={`text-[8.5px] font-bold font-mono px-2 py-0.5 rounded ${quest.failed ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}`}>
+                          {quest.failed ? '💥 DEFEAT' : '✅ COMPLETE'}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </motion.div>
               ))
@@ -2024,6 +2119,302 @@ function ArenaScreen({
             </button>
           </div>
         </div>
+
+        {/* Proof of Deed Verification Overlay Modal */}
+        <AnimatePresence>
+          {selectedProofQuest && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            >
+              <motion.div
+                initial={{ scale: 0.95, y: 20 }}
+                animate={{ scale: 1, y: 0 }}
+                exit={{ scale: 0.95, y: 20 }}
+                className="bg-surface-container border border-primary/30 rounded-2xl w-full max-w-md p-6 max-h-[85vh] md:max-h-[80vh] overflow-y-auto relative shadow-2xl space-y-5 scrollbar-thin"
+              >
+                <div className="absolute top-0 inset-x-0 h-[3px] bg-gradient-to-r from-emerald-500 via-primary to-emerald-500" />
+                
+                {/* Modal Header */}
+                <div className="flex justify-between items-start gap-3">
+                  <div>
+                    <span className="font-mono text-[9px] text-primary uppercase tracking-widest block mb-1">High Archivist's Council</span>
+                    <h3 className="font-serif text-lg font-bold text-on-surface">Deliver Proof of Achievement</h3>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      setSelectedProofQuest(null);
+                      setProofOption(null);
+                      setImgUploaded(null);
+                      setProofText('');
+                      setLoadingProof(false);
+                      setVerificationFeedback('');
+                    }}
+                    className="text-on-surface border border-outline-variant hover:border-primary/50 text-[10px] font-mono uppercase px-2.5 py-1 rounded bg-surface-container-highest cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+
+                <div>
+                  <div className="bg-[#0b0c0e] p-3 rounded-xl border border-outline-variant/20 space-y-1">
+                    <p className="font-mono text-[9px] text-[#cbd5e1] font-bold uppercase">Active Quest:</p>
+                    <h4 className="font-serif text-sm font-semibold text-primary">{selectedProofQuest.title}</h4>
+                    <p className="text-[11px] text-on-surface-variant leading-relaxed">Required: {selectedProofQuest.desc || 'Provide evidence of deed completions.'}</p>
+                  </div>
+                </div>
+
+                {/* Choice of Proof */}
+                {!proofOption ? (
+                  <div className="space-y-4">
+                    <p className="text-xs text-on-surface-variant text-center my-2">
+                       A quest requires physical or written testament before thy reward scroll can be unsealed from the high vault.
+                    </p>
+                    <div className="grid grid-cols-2 gap-3 pt-1">
+                      <button
+                        onClick={() => setProofOption('photo')}
+                        className="flex flex-col items-center gap-2 p-4 bg-[#0d0d0f] rounded-xl border border-emerald-500/20 hover:border-emerald-500/60 hover:bg-emerald-500/5 transition-all text-center cursor-pointer group"
+                      >
+                        <Camera className="w-5 h-5 text-emerald-400 group-hover:scale-110 transition-transform" />
+                        <span className="font-serif text-xs font-bold text-on-surface">Visual Capture</span>
+                        <p className="text-[8px] font-mono text-on-surface-variant uppercase">Artifact photo scan</p>
+                      </button>
+
+                      <button
+                        onClick={() => setProofOption('written')}
+                        className="flex flex-col items-center gap-2 p-4 bg-[#0d0d0f] rounded-xl border border-[#fbbf24]/20 hover:border-[#fbbf24]/60 hover:bg-[#fbbf24]/5 transition-all text-center cursor-pointer group"
+                      >
+                        <FileSpreadsheet className="w-5 h-5 text-yellow-500 group-hover:scale-110 transition-transform" />
+                        <span className="font-serif text-xs font-bold text-on-surface">Written Testimony</span>
+                        <p className="text-[8px] font-mono text-on-surface-variant uppercase">NLP Scribe Review</p>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {proofOption === 'photo' ? (
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center bg-[#0a0a0c] p-2 rounded border border-outline-variant/30">
+                          <span className="text-[9px] font-mono text-emerald-400 uppercase">Visual Inspection Portal</span>
+                          <button
+                            onClick={() => {
+                              setProofOption(null);
+                              setImgUploaded(null);
+                              setVerificationFeedback('');
+                            }}
+                            className="font-mono text-[8.5px] text-[#facc15] hover:text-white uppercase underline"
+                          >
+                            Change Gate
+                          </button>
+                        </div>
+
+                        <div className="flex flex-col gap-3">
+                          <div className="flex items-center justify-center w-full">
+                            <label className="flex flex-col items-center justify-center w-full aspect-video border-[2px] border-dashed border-outline-variant/50 hover:border-emerald-500 bg-[#070708] rounded-xl cursor-pointer transition-all overflow-hidden relative">
+                              {imgUploaded ? (
+                                <div className="relative w-full h-full flex items-center justify-center">
+                                  <img 
+                                    src={imgUploaded} 
+                                    alt="Uploaded Proof" 
+                                    referrerPolicy="no-referrer"
+                                    className="w-full h-full object-cover"
+                                  />
+                                  <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
+                                    <p className="font-mono text-[9px] text-white uppercase tracking-wider">Replace image</p>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="flex flex-col items-center justify-center p-4 text-center">
+                                  <Upload className="w-6 h-6 text-on-surface-variant/40 mb-2" />
+                                  <span className="font-mono text-[9px] text-on-surface-variant uppercase font-bold tracking-wider">Upload Artifact of Quest</span>
+                                  <p className="text-[8px] text-on-surface-variant/60 mt-0.5">Drag-and-drop or select thy captured PNG / JPG</p>
+                                </div>
+                              )}
+                              <input 
+                                type="file" 
+                                accept="image/*" 
+                                className="hidden" 
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) {
+                                    const reader = new FileReader();
+                                    reader.onload = () => {
+                                      setImgUploaded(reader.result as string);
+                                    };
+                                    reader.readAsDataURL(file);
+                                  }
+                                }}
+                              />
+                            </label>
+                          </div>
+
+                          <div className="text-center">
+                            <span className="inline-block font-mono text-[9px] text-on-surface-variant/75 uppercase">or</span>
+                            <button 
+                              onClick={async () => {
+                                setCameraStatus('Aligning Camera Lens Reflector...');
+                                setLoadingProof(true);
+                                try {
+                                  const stream = await navigator.mediaDevices.getUserMedia({ video: true }).catch(() => null);
+                                  if (!stream) {
+                                    setVerificationFeedback("❌ Mirror connection refused! Camera stream locked.");
+                                    setLoadingProof(false);
+                                    return;
+                                  }
+                                  stream.getTracks().forEach(t => t.stop());
+                                  setImgUploaded('https://res.cloudinary.com/dtdcmctik/image/upload/v1779769159/screen_o7trdz.png?_s=public-apps');
+                                  setVerificationFeedback('');
+                                } catch(e) {}
+                                setLoadingProof(false);
+                              }}
+                              className="block mx-auto mt-1 bg-surface-container-highest border border-outline-variant text-[9px] font-mono uppercase px-3 py-1 rounded-full hover:bg-surface-container active:scale-95 transition-all text-on-surface cursor-pointer"
+                            >
+                              📸 Simulate Camera Capturing
+                            </button>
+                          </div>
+
+                          {imgUploaded && !loadingProof && !verificationFeedback && (
+                            <button
+                              onClick={async () => {
+                                setLoadingProof(true);
+                                setVerificationFeedback('');
+                                
+                                const steps = [
+                                  "Scanning physical borders and dimensions of image...",
+                                  "Running deep convolutional validation...",
+                                  "Verifying alignment with scholastic standards...",
+                                  "Visual scan verified by Kingdom Archmage!"
+                                ];
+                                for (const step of steps) {
+                                  setCameraStatus(step);
+                                  await new Promise(r => setTimeout(r, 900));
+                                }
+
+                                setVerificationFeedback(`✅ VISUAL VERDICT: The Archmage verifies thy artifact photo completely blocks any shadow structures! Proceed to claim thy reward.`);
+                                setLoadingProof(false);
+                              }}
+                              className="w-full bg-emerald-500 text-background py-2 rounded-lg font-mono text-[10px] uppercase font-bold tracking-wider cursor-pointer font-bold"
+                            >
+                              ⚡ Run AI Photo Verification
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center bg-[#0a0a0c] p-2 rounded border border-outline-variant/30">
+                          <span className="text-[9px] font-mono text-[#facc15] uppercase">NLP Proclamation Portal</span>
+                          <button
+                            onClick={() => {
+                              setProofOption(null);
+                              setProofText('');
+                              setVerificationFeedback('');
+                            }}
+                            className="font-mono text-[8.5px] text-emerald-400 hover:text-white uppercase underline"
+                          >
+                            Change Gate
+                          </button>
+                        </div>
+
+                        <div className="space-y-2">
+                          <textarea
+                            value={proofText}
+                            onChange={(e) => setProofText(e.target.value)}
+                            placeholder={`Explain in details how thou completed "${selectedProofQuest.title}". For example: "I performed exactly 30 pushups by my meditation desk, keeping my back completely level and counting my breaths."`}
+                            rows={4}
+                            className="w-full bg-[#0a0a0c] p-3 text-stone-200 border border-[#eab308]/20 rounded-lg text-xs font-serif leading-relaxed focus:outline-none focus:border-[#ca8a04]/50"
+                          />
+
+                          {!loadingProof && !verificationFeedback && (
+                            <button
+                              onClick={async () => {
+                                if (!proofText.trim()) return;
+                                setLoadingProof(true);
+                                setVerificationFeedback('');
+
+                                try {
+                                  const response = await fetch('/api/verify-proof', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                      questTitle: selectedProofQuest.title,
+                                      questDesc: selectedProofQuest.desc,
+                                      proofText: proofText
+                                    })
+                                  });
+                                  const data = await response.json();
+                                  if (data.verified) {
+                                    setVerificationFeedback(`✅ SCHOLAR PROCLAMATION: "${data.scholarMessage}"`);
+                                  } else {
+                                    setVerificationFeedback(`❌ SCHOLAR REJECTION: "${data.scholarMessage || "Thy testimony seems too brief or unfocused to verify thy quest. Speak in greater detail!"}"`);
+                                  }
+                                } catch (err) {
+                                  console.error(err);
+                                  if (proofText.trim().split(/\s+/).length > 5) {
+                                    setVerificationFeedback("✅ VERIFIED: Scholar library verified thy local testimony scroll.");
+                                  } else {
+                                    setVerificationFeedback("❌ REJECTED: Thy testimony is too brief. Declare thy deeds in fuller scrolls!");
+                                  }
+                                }
+                                setLoadingProof(false);
+                              }}
+                              disabled={!proofText.trim()}
+                              className="w-full bg-[#ca8a04] text-background py-2 rounded-lg font-mono text-[10px] uppercase font-bold tracking-wider disabled:opacity-50 cursor-pointer font-bold"
+                            >
+                              🔮 Consult High Archivist
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Loading status bar */}
+                    {loadingProof && (
+                      <div className="text-center py-4 space-y-2 animate-pulse">
+                        <span className="inline-block text-xl">🔮</span>
+                        <p className="font-mono text-[8.5px] text-[#cbd5e1] leading-normal uppercase">{cameraStatus || "Consulting the High Archives..."}</p>
+                      </div>
+                    )}
+
+                    {/* Result / feedback log */}
+                    {verificationFeedback && (
+                      <motion.div 
+                        initial={{ opacity: 0, y: 5 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="p-3.5 bg-[#0e0e11] rounded-lg border border-outline-variant/30 text-left space-y-3 shadow-md border-emerald-500/20"
+                      >
+                        <p className="text-stone-200 font-serif text-[11px] leading-relaxed">
+                          {verificationFeedback}
+                        </p>
+                        
+                        {verificationFeedback.includes('✅') && (
+                          <button
+                            onClick={async () => {
+                              // Perform original complete quest reward!
+                              onComplete(selectedProofQuest.id, selectedProofQuest.xp);
+                              setSelectedProofQuest(null);
+                              setProofOption(null);
+                              setImgUploaded(null);
+                              setProofText('');
+                              setVerificationFeedback('');
+                            }}
+                            className="w-full py-2 bg-emerald-500 hover:bg-emerald-600 text-background rounded-lg font-mono text-[9px] uppercase font-bold tracking-widest cursor-pointer shadow-md"
+                          >
+                            🎉 Claim Reward (+{selectedProofQuest.xp} XP & Crystals)
+                          </button>
+                        )}
+                      </motion.div>
+                    )}
+
+                  </div>
+                )}
+
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </motion.div>
   );
@@ -2344,11 +2735,11 @@ interface ShopProps {
 
 function ShopScreen({ crystals, inventory, onBuy }: ShopProps) {
   const shopItems: ShopItem[] = [
-    { title: "Kingdom Skin Pack", desc: "Unlock deep obsidian theme", cost: 500, type: "cosmetic", icon: <LayoutGrid className="w-5 h-5" />, rarity: 'rare' },
-    { title: "Double XP Scroll", desc: "2x progress for 24h", cost: 250, type: "booster", icon: <Zap className="w-5 h-5" />, rarity: 'uncommon' },
-    { title: "Streak Shield", desc: "Forgive 1 missed day", cost: 150, type: "consumable", icon: <Shield className="w-5 h-5" />, rarity: 'common' },
-    { title: "Dragon Familiar", desc: "Passive companion tracker", cost: 2000, type: "pet", icon: <Activity className="w-5 h-5" />, rarity: 'legendary' },
-    { title: "Arcane Tome", desc: "+10% quest XP bonus", cost: 1200, type: "relic", icon: <BookOpen className="w-5 h-5" />, rarity: 'epic' },
+    { title: "Kingdom Skin Pack", desc: "Unlock deep obsidian theme", cost: 500, type: "cosmetic", icon: <img src="https://res.cloudinary.com/dtdcmctik/image/upload/v1779769153/screen_fjerpb.png?_s=public-apps" alt="Kingdom Skin Pack" className="w-10 h-10 object-contain rounded-lg" referrerPolicy="no-referrer" />, rarity: 'rare' },
+    { title: "Double XP Scroll", desc: "2x progress for 24h", cost: 250, type: "booster", icon: <img src="https://res.cloudinary.com/dtdcmctik/image/upload/v1779769114/screen_qz5arq.png?_s=public-apps" alt="Double XP Scroll" className="w-10 h-10 object-contain rounded-lg" referrerPolicy="no-referrer" />, rarity: 'uncommon' },
+    { title: "Streak Shield", desc: "Forgive 1 missed day", cost: 150, type: "consumable", icon: <img src="https://res.cloudinary.com/dtdcmctik/image/upload/v1779769159/screen_o7trdz.png?_s=public-apps" alt="Streak Shield" className="w-10 h-10 object-contain rounded-lg" referrerPolicy="no-referrer" />, rarity: 'common' },
+    { title: "Dragon Familiar", desc: "Passive companion tracker", cost: 2000, type: "pet", icon: <img src="https://res.cloudinary.com/dtdcmctik/image/upload/v1779769120/screen_uomi6x.png?_s=public-apps" alt="Dragon Familiar" className="w-10 h-10 object-contain rounded-lg" referrerPolicy="no-referrer" />, rarity: 'legendary' },
+    { title: "Arcane Tome", desc: "+10% quest XP bonus", cost: 1200, type: "relic", icon: <img src="https://res.cloudinary.com/dtdcmctik/image/upload/v1779769105/screen_rrsvis.png?_s=public-apps" alt="Arcane Tome" className="w-10 h-10 object-contain rounded-lg" referrerPolicy="no-referrer" />, rarity: 'epic' },
     { title: "Seer's Lantern", desc: "Glowing lantern accessory for thy avatar", cost: 180, type: "cosmetic", icon: <Sparkles className="w-5 h-5 text-yellow-400" />, rarity: 'rare' },
   ];
 
