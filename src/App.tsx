@@ -34,7 +34,9 @@ import {
   RefreshCw,
   Sparkles,
   LogIn,
-  ArrowUpCircle
+  ArrowUpCircle,
+  ArrowDownCircle,
+  Skull
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -1009,6 +1011,68 @@ export default function App() {
     }
   };
 
+  const handleLevelDownInstantly = async () => {
+    if (!user || !profile) return;
+    const currentLvl = profile.level;
+    const prevLvl = Math.max(1, currentLvl - 1);
+    const newXp = Math.max(0, profile.xp - 1200);
+
+    if (isGuest) {
+      const updatedProfile = {
+        ...profile,
+        xp: newXp,
+        level: prevLvl,
+        updatedAt: new Date().toISOString()
+      };
+      setProfile(updatedProfile);
+      localStorage.setItem('kom_guest_profile', JSON.stringify(updatedProfile));
+      return;
+    }
+
+    const userRef = doc(db, 'profiles', user.uid);
+    try {
+      await updateDoc(userRef, {
+        xp: newXp,
+        level: prevLvl,
+        updatedAt: serverTimestamp()
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `profiles/${user.uid}`);
+    }
+  };
+
+  const handleSkipToPrevEnemy = async () => {
+    if (!user || !profile) return;
+    
+    const activeEnemy = getCurrentEnemy(profile);
+    const currentIndex = ENEMIES.findIndex(e => e.id === activeEnemy.id);
+    const prevIndex = (currentIndex - 1 + ENEMIES.length) % ENEMIES.length;
+    const prevEnemy = ENEMIES[prevIndex];
+
+    if (isGuest) {
+      const updatedProfile = {
+        ...profile,
+        enemyId: prevEnemy.id,
+        bossHp: prevEnemy.maxHp,
+        updatedAt: new Date().toISOString()
+      };
+      setProfile(updatedProfile);
+      localStorage.setItem('kom_guest_profile', JSON.stringify(updatedProfile));
+      return;
+    }
+
+    const userRef = doc(db, 'profiles', user.uid);
+    try {
+      await updateDoc(userRef, {
+        enemyId: prevEnemy.id,
+        bossHp: prevEnemy.maxHp,
+        updatedAt: serverTimestamp()
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `profiles/${user.uid}`);
+    }
+  };
+
   const handleVanquishVictory = async () => {
     if (!user || !profile) return;
     
@@ -1108,7 +1172,9 @@ export default function App() {
                     onAwardBonusXp={handleAwardBonusXp}
                     onUnlockCosmetic={handleUnlockCosmetic}
                     onLevelUpInstantly={handleLevelUpInstantly}
+                    onLevelDownInstantly={handleLevelDownInstantly}
                     onSkipToNextEnemy={handleSkipToNextEnemy}
+                    onSkipToPrevEnemy={handleSkipToPrevEnemy}
                     onVanquishVictory={handleVanquishVictory}
                     activeTab={activeTab}
                     key="arena" 
@@ -1192,7 +1258,9 @@ interface ArenaProps {
   onAwardBonusXp: (xp: number, crystals: number, message: string) => Promise<void>;
   onUnlockCosmetic: (itemId: string, title: string, cost: number, rarity: string) => Promise<void>;
   onLevelUpInstantly: () => Promise<void> | void;
+  onLevelDownInstantly: () => Promise<void> | void;
   onSkipToNextEnemy: () => Promise<void> | void;
+  onSkipToPrevEnemy: () => Promise<void> | void;
   onVanquishVictory: () => Promise<void> | void;
   activeTab: string;
   key?: React.Key;
@@ -1214,7 +1282,9 @@ function ArenaScreen({
   onAwardBonusXp,
   onUnlockCosmetic,
   onLevelUpInstantly,
+  onLevelDownInstantly,
   onSkipToNextEnemy,
+  onSkipToPrevEnemy,
   onVanquishVictory,
   activeTab
 }: ArenaProps) {
@@ -1479,6 +1549,24 @@ function ArenaScreen({
               <Swords className="w-5 h-5 text-cyan-500 group-hover/cheat:rotate-12 transition-transform" />
               <span className="font-serif text-[11px] font-bold text-on-surface text-center">Skip to Next Foe</span>
               <p className="font-mono text-[7px] text-on-surface-variant uppercase tracking-wider">Cycle Boss</p>
+            </button>
+
+            <button 
+              onClick={onLevelDownInstantly}
+              className="flex flex-col items-center justify-center gap-1.5 p-3 px-2 bg-[#0d0d0e]/60 rounded-xl border border-outline-variant/40 hover:border-rose-500/40 hover:bg-[#1a1a1d] transition-all group/cheat cursor-pointer"
+            >
+              <ArrowDownCircle className="w-5 h-5 text-rose-500 group-hover/cheat:scale-95 transition-transform" />
+              <span className="font-serif text-[11px] font-bold text-on-surface text-center">Go to Previous Level</span>
+              <p className="font-mono text-[7px] text-on-surface-variant uppercase tracking-wider">Level Down -1</p>
+            </button>
+            
+            <button 
+              onClick={onSkipToPrevEnemy}
+              className="flex flex-col items-center justify-center gap-1.5 p-3 px-2 bg-[#0d0d0e]/60 rounded-xl border border-outline-variant/40 hover:border-violet-500/40 hover:bg-[#1a1a1d] transition-all group/cheat cursor-pointer"
+            >
+              <Skull className="w-5 h-5 text-violet-500 group-hover/cheat:-rotate-12 transition-transform" />
+              <span className="font-serif text-[11px] font-bold text-on-surface text-center">Go to Previous Foe</span>
+              <p className="font-mono text-[7px] text-on-surface-variant uppercase tracking-wider">Cycle Prev Boss</p>
             </button>
           </div>
         </div>
@@ -1899,6 +1987,74 @@ function ProfileScreen({ xp, crystals, streak, level, name, avatarUrl, inventory
           <GearSlot icon={<Shield />} label="Armor" quality={hasArmor ? "rare" : "base"} />
           <GearSlot icon={<BookOpen />} label="Relic" quality={hasRelic ? "epic" : "base"} />
           <GearSlot icon={<Star />} label="Pet" quality={hasPet ? "epic" : "base"} />
+        </div>
+      </section>
+
+      <section className="px-6 space-y-4">
+        <h3 className="font-serif text-xl font-bold flex items-center gap-3">
+          <Sparkles className="text-tertiary" />
+          Rank Ascension Path
+        </h3>
+        <div className="bg-surface-container border border-outline-variant/30 rounded-2xl p-4 space-y-3 shadow-lg">
+          <p className="font-mono text-[9px] text-on-surface-variant uppercase tracking-wider mb-2">Track the live progress of thy avatar and title evolution:</p>
+          
+          <div className="space-y-2.5">
+            {/* Sentinel Warden */}
+            <div className={`p-3 rounded-xl border flex items-center justify-between transition-all ${level < 15 ? 'border-primary bg-primary/5 shadow-[0_0_10px_rgba(255,255,255,0.05)]' : 'border-outline-variant/20 opacity-60 bg-surface-container-low'}`}>
+              <div className="flex items-center gap-3">
+                <img src={IMAGES.WIZARD_HERO} alt="Warden" className="w-10 h-10 rounded-lg object-cover bg-black/40 border border-outline-variant/30" />
+                <div>
+                  <h4 className="font-serif text-[11px] font-bold text-on-surface">Sentinel Warden</h4>
+                  <p className="font-mono text-[8px] text-on-surface-variant uppercase">Levels 1 - 14</p>
+                </div>
+              </div>
+              <div>
+                {level < 15 ? (
+                  <span className="font-mono text-[8px] bg-primary/20 text-primary border border-primary/30 px-2 py-0.5 rounded-full uppercase font-bold animate-pulse">Current Rank</span>
+                ) : (
+                  <span className="font-mono text-[8px] text-green-400 font-bold uppercase tracking-wider">Ascended</span>
+                )}
+              </div>
+            </div>
+
+            {/* Arcane Archmage */}
+            <div className={`p-3 rounded-xl border flex items-center justify-between transition-all ${level >= 15 && level < 30 ? 'border-tertiary bg-tertiary/5 shadow-[0_0_12px_rgba(214,197,149,0.15)]' : 'border-outline-variant/20 ' + (level < 15 ? 'opacity-40 bg-black/10' : 'opacity-60 bg-surface-container-low')}`}>
+              <div className="flex items-center gap-3">
+                <img src={IMAGES.ARCHMAGE_HERO} alt="Archmage" className="w-10 h-10 rounded-lg object-cover bg-black/40 border border-outline-variant/30" />
+                <div>
+                  <h4 className="font-serif text-[11px] font-bold text-on-surface">Arcane Archmage</h4>
+                  <p className="font-mono text-[8px] text-on-surface-variant uppercase">Levels 15 - 29</p>
+                </div>
+              </div>
+              <div>
+                {level >= 15 && level < 30 ? (
+                  <span className="font-mono text-[8px] bg-tertiary/20 text-tertiary border border-tertiary/30 px-2 py-0.5 rounded-full uppercase font-bold animate-pulse">Current Rank</span>
+                ) : level >= 30 ? (
+                  <span className="font-mono text-[8px] text-green-400 font-bold uppercase tracking-wider">Ascended</span>
+                ) : (
+                  <span className="font-mono text-[8px] text-on-surface-variant/40 font-bold uppercase">Locked</span>
+                )}
+              </div>
+            </div>
+
+            {/* Sovereign Emperor */}
+            <div className={`p-3 rounded-xl border flex items-center justify-between transition-all ${level >= 30 ? 'border-amber-400 bg-amber-400/5 shadow-[0_0_12px_rgba(251,191,36,0.15)]' : 'border-outline-variant/20 opacity-40 bg-black/10'}`}>
+              <div className="flex items-center gap-3">
+                <img src={IMAGES.EMPEROR_HERO} alt="Emperor" className="w-10 h-10 rounded-lg object-cover bg-black/40 border border-outline-variant/30" />
+                <div>
+                  <h4 className="font-serif text-[11px] font-bold text-on-surface">Sovereign Emperor</h4>
+                  <p className="font-mono text-[8px] text-on-surface-variant uppercase">Levels 30+</p>
+                </div>
+              </div>
+              <div>
+                {level >= 30 ? (
+                  <span className="font-mono text-[8px] bg-amber-400/20 text-yellow-400 border border-amber-400/30 px-2 py-0.5 rounded-full uppercase font-bold animate-pulse">Current Rank</span>
+                ) : (
+                  <span className="font-mono text-[8px] text-on-surface-variant/40 font-bold uppercase">Locked</span>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
