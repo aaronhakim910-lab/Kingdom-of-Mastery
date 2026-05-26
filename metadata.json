@@ -1,0 +1,6 @@
+{
+  "name": "Kingdom of Mastery",
+  "description": "A gamified habit and productivity dashboard in a dark fantasy RPG style.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
