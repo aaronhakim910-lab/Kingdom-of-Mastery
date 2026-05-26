@@ -29,6 +29,8 @@ interface Quest {
   xp: number;
   completed: boolean;
   color: string;
+  failed?: boolean;
+  category?: string;
 }
 
 interface UserProfile {

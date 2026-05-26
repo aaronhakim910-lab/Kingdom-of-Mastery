@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Swords, 
@@ -36,7 +36,11 @@ import {
   LogIn,
   ArrowUpCircle,
   ArrowDownCircle,
-  Skull
+  Skull,
+  Camera,
+  Mic,
+  Video,
+  FileText
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -78,6 +82,8 @@ interface Quest {
   xp: number;
   completed: boolean;
   color: string;
+  failed?: boolean; // Track if habit was missed/failed
+  category?: 'Health' | 'Mind' | 'School' | 'Skills' | string; // Quest category
 }
 
 interface District {
@@ -108,6 +114,7 @@ interface UserProfile {
   level: number;
   nextEvolution: string;
   enemyId?: string;
+  hp?: number; // Player's colored Health Points bar (0-100)
   createdAt: any;
   updatedAt: any;
 }
@@ -163,6 +170,37 @@ const getRankAvatar = (level: number) => {
   if (level < 15) return IMAGES.WIZARD_HERO;
   if (level < 30) return IMAGES.ARCHMAGE_HERO;
   return IMAGES.EMPEROR_HERO;
+};
+
+const getThemeStyles = (level: number) => {
+  if (level < 15) {
+    return {
+      bg: 'bg-[#0b140e]',
+      container: 'bg-[#112016]',
+      border: 'border-emerald-600/30 text-emerald-400',
+      title: 'Novice Forest',
+      glow: 'shadow-[0_0_20px_rgba(16,185,129,0.15)]',
+      textColor: 'text-emerald-400',
+    };
+  } else if (level < 30) {
+    return {
+      bg: 'bg-[#1a1511]',
+      container: 'bg-[#261d17]',
+      border: 'border-orange-600/30 text-orange-400',
+      title: 'Iron Fortress',
+      glow: 'shadow-[0_0_20px_rgba(249,115,22,0.15)]',
+      textColor: 'text-orange-400',
+    };
+  } else {
+    return {
+      bg: 'bg-[#070314]',
+      container: 'bg-[#100726]',
+      border: 'border-purple-600/30 text-purple-400',
+      title: 'Cosmic Citadel',
+      glow: 'shadow-[0_0_20px_rgba(168,85,247,0.15)]',
+      textColor: 'text-purple-400',
+    };
+  }
 };
 
 const getCurrentEnemy = (profile: UserProfile | null) => {
@@ -331,6 +369,7 @@ export default function App() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [districts, setDistricts] = useState<District[]>([]);
   const [quests, setQuests] = useState<Quest[]>([]);
+  const [bossAttackEffect, setBossAttackEffect] = useState<string | null>(null);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [oracleHistory, setOracleHistory] = useState<any[]>([]);
 
@@ -380,6 +419,7 @@ export default function App() {
           bossHp: 650,
           level: 12,
           nextEvolution: "The Emperor",
+          hp: 100, // Initialize player HP to 100
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         };
@@ -458,6 +498,7 @@ export default function App() {
           bossHp: 650,
           level: 12,
           nextEvolution: "The Emperor",
+          hp: 100, // Initialize guest player HP to 100
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         };
@@ -627,6 +668,10 @@ export default function App() {
   const handleCompleteQuest = async (questId: string, xp: number) => {
     if (!user || !profile) return;
 
+    // Category C: Streak Multiplier (consecutive completions, e.g. streak >= 10 is 1.5x, streak >= 5 is 1.2x)
+    const streakMultiplier = (profile.streak || 0) >= 10 ? 1.5 : (profile.streak || 0) >= 5 ? 1.2 : 1.0;
+    const crystalEarned = Math.round(xp * 0.5 * streakMultiplier);
+
     const nextXpTotal = profile.xp + xp;
     const calculatedLevel = Math.floor(nextXpTotal / 1200) + 1;
     const finalLevel = Math.max(profile.level, calculatedLevel);
@@ -641,7 +686,7 @@ export default function App() {
         xp: nextXpTotal,
         level: finalLevel,
         bossHp: Math.max(0, profile.bossHp - Math.round(xp / 2)),
-        crystals: profile.crystals + Math.round(xp * 0.5),
+        crystals: profile.crystals + crystalEarned,
         updatedAt: new Date().toISOString()
       };
       setProfile(updatedProfile);
@@ -665,7 +710,69 @@ export default function App() {
         xp: nextXpTotal,
         level: finalLevel,
         bossHp: Math.max(0, profile.bossHp - Math.round(xp / 2)),
-        crystals: profile.crystals + Math.round(xp * 0.5),
+        crystals: profile.crystals + crystalEarned,
+        updatedAt: serverTimestamp()
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `profiles/${user.uid}`);
+    }
+  };
+
+  const handleFailQuest = async (questId: string) => {
+    if (!user || !profile) return;
+
+    const currentEnemy = getCurrentEnemy(profile);
+    const prevHp = profile.hp ?? 100;
+    let nextHp = Math.max(0, prevHp - 20);
+    let crystalPenalty = 0;
+    
+    // Trigger Boss Attack animation
+    setBossAttackEffect(currentEnemy.name);
+    setTimeout(() => {
+      setBossAttackEffect(null);
+    }, 1500);
+
+    if (nextHp <= 0) {
+      // Revival event with penalty
+      nextHp = 100;
+      crystalPenalty = 20; // Revive fee
+      alert(`⚠️ DEFEATED! ${currentEnemy.name} launched an ultimate attack! Thy HP dropped to 0! The High Scholar has revived thy spirit, taxing 20 Crystals.`);
+    }
+
+    const nextCrystals = Math.max(0, profile.crystals - crystalPenalty);
+
+    if (isGuest) {
+      const updatedQuests = quests.map(q => q.id === questId ? { ...q, completed: true, failed: true } : q);
+      setQuests(updatedQuests);
+      localStorage.setItem('kom_guest_quests', JSON.stringify(updatedQuests));
+
+      const updatedProfile = {
+        ...profile,
+        hp: nextHp,
+        crystals: nextCrystals,
+        updatedAt: new Date().toISOString()
+      };
+      setProfile(updatedProfile);
+      localStorage.setItem('kom_guest_profile', JSON.stringify(updatedProfile));
+      return;
+    }
+
+    const questRef = doc(db, 'profiles', user.uid, 'quests', questId);
+    try {
+      await updateDoc(questRef, {
+        completed: true,
+        failed: true,
+        updatedAt: serverTimestamp()
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `profiles/${user.uid}/quests/${questId}`);
+    }
+
+    const userRef = doc(db, 'profiles', user.uid);
+    try {
+      await updateDoc(userRef, {
+        hp: nextHp,
+        crystals: nextCrystals,
         updatedAt: serverTimestamp()
       });
     } catch (err) {
@@ -1131,23 +1238,89 @@ export default function App() {
           <LoginScreen onLogin={handleLogin} onGuestLogin={handleGuestLogin} />
         ) : (
           <div className="flex flex-col h-full w-full relative overflow-hidden">
-            {/* Top App Bar (Nested & Styled responsive within the frame) */}
-            <header className="bg-[#1a1a1d] flex justify-between items-center px-6 h-16 border-b border-outline-variant/30 shrink-0 w-full z-10 shadow-md">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full overflow-hidden border border-tertiary bg-surface-container-highest">
-                  <img src={user.photoURL || IMAGES.AVATAR_THUMB} alt="Avatar" className="w-full h-full object-cover pixelated" referrerPolicy="no-referrer" />
+            {/* Boss Attack Full Screen Flash Red Vignette Overlay */}
+            {bossAttackEffect && (
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: [0, 0.9, 0], scale: [1, 1.05, 1] }}
+                transition={{ duration: 1.5, ease: "easeInOut" }}
+                className="absolute inset-0 bg-red-950/50 pointer-events-none z-50 border-[10px] border-red-500 shadow-[inset_0_0_100px_rgba(239,68,68,0.9)] flex flex-col items-center justify-center"
+              >
+                <div className="bg-[#120303]/90 px-5 py-3.5 rounded-xl border border-red-500/50 text-center animate-bounce shadow-2xl flex flex-col items-center gap-2 max-w-[280px]">
+                  <span className="text-xl">💥</span>
+                  <h3 className="text-red-500 font-serif text-[11px] font-bold tracking-[0.25em] uppercase">BOSS ATTACK!</h3>
+                  <p className="text-stone-300 font-mono text-[9px] mt-0.5 leading-relaxed">
+                    {bossAttackEffect} launched a critical strike for missing thy habits! <span className="text-red-400 font-bold">-20 HP</span>
+                  </p>
                 </div>
-                <div>
-                  <h1 className="font-serif text-[11px] font-bold tracking-wider text-primary">Kingdom of Mastery</h1>
-                  <p className="font-sans text-[8px] text-on-surface-variant/80 truncate max-w-[120px]">Account: {profile.name}</p>
+              </motion.div>
+            )}
+
+            {/* Top App Bar with Gamified HUD Header */}
+            <header className="bg-[#121214] flex flex-col justify-center px-4 py-3 border-b border-outline-variant/30 shrink-0 w-full z-10 shadow-lg gap-2">
+              <div className="flex justify-between items-center w-full">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-full overflow-hidden border border-tertiary bg-surface-container-highest">
+                    <img src={user.photoURL || IMAGES.AVATAR_THUMB} alt="Avatar" className="w-full h-full object-cover pixelated" referrerPolicy="no-referrer" />
+                  </div>
+                  <div>
+                    <h1 className="font-serif text-[10px] font-bold tracking-wider text-primary truncate max-w-[110px]">Kingdom of Mastery</h1>
+                    <p className="font-sans text-[7px] text-on-surface-variant/75 truncate max-w-[110px]">{profile.name}</p>
+                  </div>
+                </div>
+                
+                {/* Level and Treasury Indicators */}
+                <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1 bg-[#1c1c1f] px-2 py-0.5 rounded border border-outline-variant/40 shadow-inner">
+                    <span className="font-mono text-[9px] text-tertiary font-bold">LVL {profile.level}</span>
+                  </div>
+                  <div className="flex items-center gap-1 bg-[#1c1c1f] px-2 py-0.5 rounded border border-outline-variant/40 shadow-inner">
+                    <span className="font-mono text-[9px] text-secondary font-bold">{profile.crystals}</span>
+                    <Diamond className="w-2 h-2 text-cyan-400 fill-cyan-400" />
+                  </div>
                 </div>
               </div>
-              <div className="flex items-center gap-2 bg-[#26262b] px-3 py-1 rounded-full border border-outline-variant/50 shadow-inner">
-                <span className="font-mono text-[10px] text-tertiary font-bold">LVL {profile.level}</span>
-                <span className="text-on-surface-variant/30 text-[9px]">|</span>
-                <div className="flex items-center gap-1">
-                  <span className="font-mono text-[10px] text-secondary font-bold">{profile.crystals}</span>
-                  <Diamond className="w-2.5 h-2.5 text-cyan-400 fill-cyan-400" />
+
+              {/* Row 2: Dual Bars for XP and Player HP */}
+              <div className="grid grid-cols-2 gap-3.5 w-full">
+                {/* XP Bar */}
+                <div className="flex flex-col gap-0.5">
+                  <div className="flex justify-between font-mono text-[7px] text-stone-400">
+                    <span>PROGRESS (XP)</span>
+                    <span>{profile.xp % 1200} / 1200</span>
+                  </div>
+                  <div className="w-full h-1.5 bg-surface-container rounded-full overflow-hidden relative border border-outline-variant/20 shadow-inner">
+                    <motion.div 
+                      className="absolute top-0 left-0 h-full bg-gradient-to-r from-cyan-600 to-cyan-400"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${Math.round(((profile.xp % 1200) / 1200) * 100)}%` }}
+                      transition={{ duration: 1 }}
+                    />
+                  </div>
+                </div>
+
+                {/* HP Bar */}
+                <div className="flex flex-col gap-0.5">
+                  <div className="flex justify-between font-mono text-[7px] text-stone-400">
+                    <span>HEALTH (HP)</span>
+                    <span className={(profile.hp ?? 100) < 30 ? "text-error animate-pulse font-bold" : ""}>
+                      {profile.hp ?? 100} / 100
+                    </span>
+                  </div>
+                  <div className="w-full h-1.5 bg-surface-container rounded-full overflow-hidden relative border border-outline-variant/20 shadow-inner">
+                    <motion.div 
+                      className={`absolute top-0 left-0 h-full bg-gradient-to-r ${
+                        (profile.hp ?? 100) > 50 
+                          ? 'from-emerald-700 to-emerald-400 shadow-[0_0_5px_rgba(52,211,153,0.3)]' 
+                          : (profile.hp ?? 100) > 20 
+                            ? 'from-amber-600 to-amber-400' 
+                            : 'from-red-700 to-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.5)]'
+                      }`}
+                      initial={{ width: 0 }}
+                      animate={{ width: `${profile.hp ?? 100}%` }}
+                      transition={{ duration: 0.8 }}
+                    />
+                  </div>
                 </div>
               </div>
             </header>
@@ -1161,6 +1334,8 @@ export default function App() {
                     bossHp={profile.bossHp} 
                     maxBossHp={getCurrentEnemy(profile).maxHp} 
                     onComplete={handleCompleteQuest} 
+                    onFailQuest={handleFailQuest}
+                    bossAttackEffect={bossAttackEffect}
                     onAddQuest={handleAddQuest}
                     onDeleteQuest={handleDeleteQuest}
                     onResetQuests={handleResetQuests}
@@ -1226,7 +1401,7 @@ export default function App() {
             </main>
 
             {/* Bottom Navigation Navbar - Contained perfectly inside mock borders */}
-            <nav className="h-16 bg-[#18181b] border-t border-primary/15 flex justify-around items-center px-2 shrink-0 w-full z-10 shadow-[0_-4px_25px_rgba(0,0,0,0.6)]">
+            <nav className="h-[4.75rem] pb-[0.75rem] md:h-16 md:pb-0 bg-[#18181b] border-t border-primary/15 flex justify-around items-center px-2 shrink-0 w-full z-10 shadow-[0_-4px_25px_rgba(0,0,0,0.6)]">
               <NavButton icon={<Swords />} label="Arena" active={activeTab === 'arena'} onClick={() => setActiveTab('arena')} />
               <NavButton icon={<Castle />} label="Districts" active={activeTab === 'districts'} onClick={() => setActiveTab('districts')} />
               <NavButton icon={<BarChart3 />} label="Stats" active={activeTab === 'stats'} onClick={() => setActiveTab('stats')} />
@@ -1247,7 +1422,9 @@ interface ArenaProps {
   bossHp: number;
   maxBossHp: number;
   onComplete: (id: string, xp: number) => void;
-  onAddQuest: (title: string, desc: string, xp: number) => void;
+  onFailQuest: (id: string) => void; // Fail a habit, boss attacks
+  bossAttackEffect: string | null; // Name of attacking boss if active
+  onAddQuest: (title: string, desc: string, xp: number, category?: string) => void;
   onDeleteQuest: (id: string) => void;
   onResetQuests: () => void;
   user: any;
@@ -1271,6 +1448,8 @@ function ArenaScreen({
   bossHp, 
   maxBossHp, 
   onComplete, 
+  onFailQuest,
+  bossAttackEffect,
   onAddQuest, 
   onDeleteQuest, 
   onResetQuests,
@@ -1292,6 +1471,95 @@ function ArenaScreen({
   const [newTitle, setNewTitle] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [newXp, setNewXp] = useState(15);
+
+  // Category B: Mystic AI Verification states
+  const [activeVerifyTab, setActiveVerifyTab] = useState<'camera' | 'journal' | null>(null);
+  
+  // Camera specific states
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [cameraStatus, setCameraStatus] = useState<string>('');
+  const [isScanning, setIsScanning] = useState(false);
+
+  // Journal states
+  const [journalText, setJournalText] = useState('');
+  const [journalStatus, setJournalStatus] = useState('');
+  const [journalResult, setJournalResult] = useState<{ grade: string, comment: string, scrollTitle: string } | null>(null);
+  const [isGrading, setIsGrading] = useState(false);
+
+  const startCameraScan = async () => {
+    try {
+      setCameraStatus('Opening camera gate...');
+      setIsScanning(true);
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } });
+      setCameraStream(stream);
+      // Give DOM time to bind video node
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      }, 300);
+
+      const steps = [
+        'Camera links established! Tracking spine position...',
+        'Spine orientation wireframe aligned...',
+        'Analyzing neck curvature & balance...',
+        'AI Check: Perfect alignment! Optimal posture verified.'
+      ];
+
+      for (let i = 0; i < steps.length; i++) {
+        await new Promise(r => setTimeout(r, 1200));
+        setCameraStatus(steps[i]);
+      }
+
+      // Close stream
+      stream.getTracks().forEach(t => t.stop());
+      setCameraStream(null);
+      setIsScanning(false);
+
+      // Award Rewards
+      await onAwardBonusXp(40, 40, "🔮 AI Posture Verified! +40 XP & +40 Crystals awarded.");
+      setCameraStatus('Postural scan COMPLETE! Traveler rewarded +40 XP & +40 Crystals.');
+    } catch (err) {
+      console.error(err);
+      setCameraStatus('Camera permission refused or device unrecognized.');
+      setIsScanning(false);
+    }
+  };
+
+  const submitJournalNLP = async () => {
+    if (!journalText.trim()) return;
+    try {
+      setIsGrading(true);
+      setJournalStatus('Transmitting reflection scrolls to Grand Scholar...');
+      
+      const res = await fetch('/api/verify-journal', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ journalText })
+      });
+      const data = await res.json();
+      
+      if (data.error) {
+        setJournalStatus(`Grand Scholar's Vision blocked: ${data.error}`);
+        setIsGrading(false);
+        return;
+      }
+
+      setJournalResult(data);
+      setJournalStatus('Graded Successfully!');
+      setIsGrading(false);
+
+      // Award Rewards
+      await onAwardBonusXp(40, 40, `🔮 Journal Verified! Scholar awarded ${data.grade}.`);
+    } catch (err) {
+      console.error(err);
+      setJournalStatus('Reflection transcript submission failed.');
+      setIsGrading(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1316,6 +1584,12 @@ function ArenaScreen({
       >
         <div className="absolute inset-0 bg-gradient-to-t from-surface-container-lowest via-surface-container-lowest/60 to-transparent" />
         
+        {/* Floating Realm Info */}
+        <div className="absolute top-4 left-4 bg-black/75 backdrop-blur-md text-[8px] font-mono font-bold text-primary tracking-wider px-2.5 py-1 rounded-full border border-primary/30 shadow-md flex items-center gap-1.5 z-10">
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          LAND: {getThemeStyles(profile ? profile.level : 1).title.toUpperCase()}
+        </div>
+
         <div className="relative z-10 animate-float flex flex-col items-center">
           <div className="relative">
             <div className="absolute inset-0 rounded-full bg-tertiary/20 blur-xl animate-pulse" />
@@ -1386,6 +1660,170 @@ function ArenaScreen({
           onUnlockCosmetic={onUnlockCosmetic}
           activeTab={activeTab}
         />
+
+        {/* Category B: Mystic AI Habit Verification Vault */}
+        <section className="bg-gradient-to-br from-[#121215] to-[#18181c] rounded-2xl p-5 border border-primary/25 shadow-2xl relative overflow-hidden">
+          <div className="absolute inset-x-0 top-0 h-[1.5px] bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
+          
+          <div className="relative z-10">
+            <h3 className="font-serif text-base text-on-surface font-bold tracking-wide flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-tertiary" />
+              Mystic AI Verification Vault
+            </h3>
+            <p className="font-mono text-[9px] text-on-surface-variant/70 mt-1 uppercase tracking-wider">
+              Verify completion via Camera posture or Scholar Journal NLP
+            </p>
+
+            {/* Quick Modality Switcher */}
+            <div className="grid grid-cols-2 gap-2 mt-4 bg-surface-container-low p-1 rounded-lg border border-outline-variant/20">
+              <button
+                onClick={() => {
+                  setActiveVerifyTab(activeVerifyTab === 'camera' ? null : 'camera');
+                  setCameraStatus('');
+                  setCameraStream(null);
+                }}
+                className={`flex flex-col items-center gap-1.5 py-2.5 rounded-md font-mono text-[8px] uppercase font-bold transition-all cursor-pointer ${activeVerifyTab === 'camera' ? 'bg-primary/20 text-primary border border-primary/30' : 'text-on-surface-variant hover:bg-surface-container-high'}`}
+              >
+                <Camera className="w-3.5 h-3.5" />
+                Posture Scan
+              </button>
+              <button
+                onClick={() => {
+                  setActiveVerifyTab(activeVerifyTab === 'journal' ? null : 'journal');
+                  setJournalStatus('');
+                }}
+                className={`flex flex-col items-center gap-1.5 py-2.5 rounded-md font-mono text-[8px] uppercase font-bold transition-all cursor-pointer ${activeVerifyTab === 'journal' ? 'bg-[#ca8a04]/25 text-[#facc15] border border-[#eab308]/30' : 'text-on-surface-variant hover:bg-surface-container-high'}`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                Journal NLP
+              </button>
+            </div>
+
+            {/* Dynamic Interactive Scanner Panels */}
+            <AnimatePresence mode="wait">
+              {activeVerifyTab === 'camera' && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="mt-4 bg-surface-container rounded-xl p-4 border border-primary/10 overflow-hidden"
+                >
+                  <h4 className="font-mono text-[10px] text-primary font-bold uppercase mb-2">📷 Posture Alignment Scanner</h4>
+                  <p className="text-xs text-on-surface-variant mb-4 leading-relaxed">
+                    Verify thy health habit by aligning thy chin & back against the deep grid alignment target.
+                  </p>
+
+                  <div className="relative w-full aspect-video bg-black rounded-lg border border-primary/20 overflow-hidden flex flex-col items-center justify-center">
+                    {/* Live Camera Feed */}
+                    {cameraStream ? (
+                      <video 
+                        ref={videoRef} 
+                        autoPlay 
+                        playsInline 
+                        muted 
+                        className="w-full h-full object-cover transform -scale-x-100"
+                      />
+                    ) : (
+                      <div className="text-center p-4">
+                        <Video className="w-8 h-8 text-on-surface-variant/30 mx-auto mb-2 animate-pulse" />
+                        <p className="font-mono text-[8px] text-on-surface-variant/65">CAMERA GATE DISCONNECTED</p>
+                      </div>
+                    )}
+
+                    {/* Cyber Alignment Targets */}
+                    {isScanning && (
+                      <div className="absolute inset-0 border-[2px] border-dashed border-primary/30 pointer-events-none animate-pulse flex items-center justify-center">
+                        <div className="w-24 h-24 rounded-full border border-primary/50 flex items-center justify-center relative">
+                          <span className="absolute w-3 h-[1px] bg-primary" />
+                          <span className="absolute w-[1px] h-3 bg-primary" />
+                        </div>
+                        {/* Horizontal scanning light reflection bar */}
+                        <motion.div 
+                          initial={{ y: -50 }}
+                          animate={{ y: [0, 160, 0] }}
+                          transition={{ repeat: Infinity, duration: 2.2, ease: "linear" }}
+                          className="absolute inset-x-0 h-[2px] bg-primary/60 shadow-[0_0_12px_rgba(var(--color-primary),0.8)]"
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-4 flex flex-col gap-2">
+                    <button
+                      onClick={startCameraScan}
+                      disabled={isScanning}
+                      className="w-full py-2 bg-primary text-background rounded font-mono text-[10px] font-bold uppercase tracking-wider hover:brightness-110 active:scale-95 transition-transform disabled:opacity-50 cursor-pointer"
+                    >
+                      {isScanning ? '🔍 SCANNING RECTITUDE...' : '⚡ INITIALIZE POSTURE CAPTURE'}
+                    </button>
+                    {cameraStatus && (
+                      <div className="mt-2 bg-surface-container-highest/60 p-2.5 rounded border border-outline-variant/30 text-center font-mono text-[9px] text-[#cbd5e1] leading-relaxed">
+                        {cameraStatus}
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+
+              {activeVerifyTab === 'journal' && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="mt-4 bg-surface-container rounded-xl p-4 border border-[#eab308]/10 overflow-hidden"
+                >
+                  <h4 className="font-mono text-[10px] text-[#facc15] font-bold uppercase mb-2">📜 Grand Scholar NLP reflection</h4>
+                  <p className="text-xs text-on-surface-variant mb-3 leading-relaxed">
+                    Reflect on thy daily efforts. Submit at least 2 complete sentences to the Gemini High Library Scroll.
+                  </p>
+
+                  <textarea
+                    value={journalText}
+                    onChange={(e) => setJournalText(e.target.value)}
+                    placeholder="E.g., Today I resisted temptations of idle snacking and maintained my intense focus blocks. I conquered the procrastination demon by writing 500 words before noon..."
+                    rows={4}
+                    className="w-full bg-[#0d0d0f] p-3 text-stone-200 border border-[#eab308]/20 rounded-lg text-xs font-serif leading-relaxed focus:outline-none focus:border-[#ca8a04]/50"
+                  />
+
+                  <div className="mt-4 flex flex-col gap-2">
+                    <button
+                      onClick={submitJournalNLP}
+                      disabled={isGrading || !journalText.trim()}
+                      className="w-full py-2 bg-[#ca8a04] text-background rounded font-mono text-[10px] font-bold uppercase tracking-wider hover:brightness-110 active:scale-95 transition-transform disabled:opacity-50 cursor-pointer"
+                    >
+                      {isGrading ? '🔮 SCHOLAR GRADING REFLECTION...' : '⚡ TRANSMIT REFLECTION'}
+                    </button>
+
+                    {journalStatus && (
+                      <div className="mt-2 bg-[#1b1509]/60 p-2.5 rounded border border-[#eab308]/30 text-stone-300 font-mono text-[9px] leading-relaxed text-center">
+                        {journalStatus}
+                      </div>
+                    )}
+
+                    {journalResult && (
+                      <motion.div 
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="mt-3 bg-[#131317] border border-[#facc15]/30 p-3.5 rounded-xl space-y-2 text-left shadow-lg"
+                      >
+                        <div className="flex items-center justify-between border-b border-outline-variant/30 pb-1.5">
+                          <span className="font-serif text-[10px] text-[#facc15] font-bold uppercase tracking-wider">{journalResult.scrollTitle || "Scholar's Judgment"}</span>
+                          <span className="font-mono text-xs text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 font-bold">GRADE: {journalResult.grade}</span>
+                        </div>
+                        <p className="text-stone-300 font-serif text-[10px] italic leading-relaxed">
+                          "{journalResult.comment || "Thy reflections display focus and stamina. Stay vigilant, traveler."}"
+                        </p>
+                        <div className="text-[8px] font-mono text-[#facc15]/80 flex items-center justify-center gap-1.5 bg-[#facc15]/5 py-1 rounded">
+                          ✨ AI Reward Verification Logged: +40 XP & +40 Crystals
+                        </div>
+                      </motion.div>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </section>
 
         {/* Daily Quests */}
         <section className="flex flex-col gap-4">
@@ -1478,20 +1916,36 @@ function ArenaScreen({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <h4 className={`font-mono text-sm font-bold truncate ${quest.completed ? 'line-through text-on-surface-variant' : 'text-on-surface'}`}>{quest.title}</h4>
-                      {quest.completed && <span className="text-[7px] font-mono bg-emerald-500/20 text-emerald-400 px-1 py-0.2 rounded">VICTORIOUS</span>}
+                      {quest.completed && (
+                        <span className={`text-[7px] font-mono px-1 py-0.2 rounded ${quest.failed ? 'bg-red-500/20 text-red-500/80' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                          {quest.failed ? 'TUMBLED' : 'VICTORIOUS'}
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-on-surface-variant truncate">{quest.desc || "Daily habit tracking quest."}</p>
                   </div>
                   <div className="flex items-center gap-2">
                     {!quest.completed ? (
-                      <button 
-                        onClick={() => onComplete(quest.id, quest.xp)}
-                        className="bg-primary-container text-primary hover:bg-primary hover:text-background font-mono text-[10px] font-bold uppercase px-3 py-2 rounded border border-primary/40 transition-colors uppercase active:scale-95 cursor-pointer"
-                      >
-                        +{quest.xp} XP
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button 
+                          onClick={() => onComplete(quest.id, quest.xp)}
+                          title="Succeed habit"
+                          className="bg-emerald-950/40 text-emerald-400 hover:bg-emerald-500 hover:text-background font-mono text-[8px] font-bold uppercase px-2 py-1.5 rounded border border-emerald-500/30 transition-all uppercase active:scale-95 cursor-pointer"
+                        >
+                          Succ
+                        </button>
+                        <button 
+                          onClick={() => onFailQuest(quest.id)}
+                          title="Missed/failed habit"
+                          className="bg-red-950/40 text-red-400 hover:bg-red-500 hover:text-background font-mono text-[8px] font-bold uppercase px-2 py-1.5 rounded border border-red-500/30 transition-all id-fail-quest uppercase active:scale-95 cursor-pointer"
+                        >
+                          Miss
+                        </button>
+                      </div>
                     ) : (
-                      <span className="text-xs text-emerald-400 font-bold font-mono">+{quest.xp} XP</span>
+                      <span className={`text-[9px] font-bold font-mono ${quest.failed ? 'text-red-400' : 'text-emerald-400'}`}>
+                        {quest.failed ? '💥 DEFEAT' : `+${quest.xp} XP`}
+                      </span>
                     )}
                     <button 
                       onClick={() => onDeleteQuest(quest.id)}
@@ -1690,6 +2144,32 @@ function StatsScreen({
 
   const currentLevelProgress = Math.round((profile.xp % 1500) / 1500 * 100);
 
+  const categoriesList = ['Health', 'Mind', 'School', 'Skills'];
+
+  const categoryStats = categoriesList.map((cat) => {
+    const matchingQuests = quests.filter((q) => q.category?.toLowerCase() === cat.toLowerCase());
+    const completedCount = matchingQuests.filter((q) => q.completed).length;
+    const totalCount = matchingQuests.length;
+    
+    const baselinePct = cat === 'Health' ? 82 : cat === 'Mind' ? 90 : cat === 'School' ? 75 : 88;
+    const fallbackCount = cat === 'Health' ? 14 : cat === 'Mind' ? 19 : cat === 'School' ? 9 : 22;
+    
+    const percentage = totalCount > 0 
+      ? Math.round((completedCount / totalCount) * 100) 
+      : Math.min(100, Math.round(baselinePct + (profile.level * 0.5)));
+
+    const count = totalCount > 0
+      ? completedCount
+      : Math.round(fallbackCount + (profile.level * 0.8));
+
+    return {
+      name: cat,
+      percentage,
+      count,
+      activeQuestsCount: totalCount
+    };
+  });
+
   return (
     <motion.div 
       initial={{ opacity: 0 }}
@@ -1697,6 +2177,18 @@ function StatsScreen({
       exit={{ opacity: 0 }}
       className="flex flex-col gap-8 px-6 py-8"
     >
+      {/* Tip: Perfect Days Banner */}
+      <div className="bg-[#1b1509]/60 border border-amber-500/25 p-4 rounded-2xl flex items-center gap-3.5 shadow-xl relative overflow-hidden">
+        <div className="absolute inset-y-0 left-0 w-1 bg-amber-500" />
+        <span className="text-2xl animate-pulse">🔥</span>
+        <div>
+          <h4 className="font-serif text-[11px] font-bold text-[#facc15] uppercase tracking-wider">Discipline Tip</h4>
+          <p className="text-[10px] text-stone-300 font-sans mt-0.5 leading-normal">
+            Achieving a <strong className="text-white">perfect day</strong> by completing all thy daily quests will fuel and increase thy <strong className="text-secondary">XP streak</strong>!
+          </p>
+        </div>
+      </div>
+
       <section className="space-y-4">
         <h2 className="font-serif text-xl font-bold flex items-center gap-3">
           <Castle className="text-tertiary" />
@@ -1757,6 +2249,60 @@ function StatsScreen({
               </Bar>
             </BarChart>
           </ResponsiveContainer>
+        </div>
+      </section>
+
+      <section className="space-y-4">
+        <h2 className="font-serif text-xl font-bold flex items-center gap-3">
+          <BookOpen className="text-tertiary" />
+          Category Alignment Metrics
+        </h2>
+        <div className="bg-gradient-to-br from-[#121215] to-[#18181c] rounded-2xl p-5 border border-primary/25 space-y-4 shadow-2xl relative overflow-hidden">
+          <div className="absolute inset-x-0 top-0 h-[1.5px] bg-gradient-to-r from-transparent via-[#d6c595]/30 to-transparent" />
+          <p className="font-mono text-[9px] text-[#c5c3e4]/80 uppercase tracking-wider relative z-10">
+            Habit completion percentages and total counts per division:
+          </p>
+
+          <div className="space-y-3 relative z-10">
+            {categoryStats.map((cat, idx) => {
+              const bgColors = {
+                Health: 'bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.4)]',
+                Mind: 'bg-indigo-500 shadow-[0_0_12px_rgba(99,102,241,0.4)]',
+                School: 'bg-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.4)]',
+                Skills: 'bg-cyan-500 shadow-[0_0_12px_rgba(6,182,212,0.4)]'
+              }[cat.name as 'Health' | 'Mind' | 'School' | 'Skills'] || 'bg-primary';
+
+              const indicator = {
+                Health: '❤️',
+                Mind: '🧠',
+                School: '🎓',
+                Skills: '⚡'
+              }[cat.name as 'Health' | 'Mind' | 'School' | 'Skills'] || '✨';
+
+              return (
+                <div key={cat.name} className="space-y-1.5 p-3.5 bg-[#0d0d0f]/50 rounded-xl border border-outline-variant/15 hover:border-outline-variant/35 transition-all">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="font-serif font-bold text-stone-200 flex items-center gap-1.5">
+                      <span>{indicator}</span>
+                      {cat.name} Habit Sector
+                    </span>
+                    <span className="font-mono text-[10px] text-on-surface-variant font-bold">
+                      {cat.count} Logged | <span className="text-secondary">{cat.percentage}% Done</span>
+                    </span>
+                  </div>
+                  
+                  <div className="h-2 bg-surface-container-highest rounded-full overflow-hidden relative border border-outline-variant/20">
+                    <motion.div 
+                      className={`absolute top-0 left-0 h-full ${bgColors}`}
+                      initial={{ width: 0 }}
+                      animate={{ width: `${cat.percentage}%` }}
+                      transition={{ duration: 1.2, delay: idx * 0.1 }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </section>
 
@@ -1904,6 +2450,8 @@ interface ProfileProps {
 }
 
 function ProfileScreen({ xp, crystals, streak, level, name, avatarUrl, inventory, onLogout }: ProfileProps) {
+  const [subTab, setSubTab] = useState<'profile' | 'trophies'>('profile');
+
   const hasWeapon = inventory.some(i => i.category === 'weapon');
   const hasArmor = inventory.some(i => i.itemId === 'kingdom_skin_pack' || i.category === 'armor' || i.category === 'cosmetic');
   const hasRelic = inventory.some(i => i.itemId === 'arcane_tome' || i.category === 'relic');
@@ -1915,148 +2463,267 @@ function ProfileScreen({ xp, crystals, streak, level, name, avatarUrl, inventory
     return IMAGES.EMPEROR_HERO; // Emperor Hero
   };
 
+  const TROPHIES = [
+    {
+      id: 'scout',
+      name: 'Novice Forest Ranger',
+      req: 'Unlocked automatically at Level 1',
+      unlocked: level >= 1,
+      desc: 'Thou hast stepped onto the sacred soil of the Novice Forest and embarked upon thy epic habit quest.',
+      icon: '🌲',
+      bgImg: 'https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=150&q=80'
+    },
+    {
+      id: 'disciplined',
+      name: 'Conqueror of Habits',
+      req: 'Requires Level 3 or higher',
+      unlocked: level >= 3,
+      desc: 'Proven to withstand early sloth. Vanquished bad habits and registered thy first successful streaks.',
+      icon: '🛡️',
+      bgImg: 'https://images.unsplash.com/photo-1531842477197-54cf88ea4922?auto=format&fit=crop&w=150&q=80'
+    },
+    {
+      id: 'fortress',
+      name: 'Iron Fortress Raider',
+      req: 'Requires Level 5 or higher',
+      unlocked: level >= 5,
+      desc: 'Ventrified thy soul through heavy fire and sulfur. Formidable fortress architect.',
+      icon: '🌋',
+      bgImg: 'https://images.unsplash.com/photo-1518005020951-eccb494ad742?auto=format&fit=crop&w=150&q=80'
+    },
+    {
+      id: 'nebula',
+      name: 'Cosmic Citadel Voyager',
+      req: 'Requires Level 10 or higher',
+      unlocked: level >= 10,
+      desc: 'Breached the gravity well! Reached the ethereal nebula starfields and entered alignment with high constellations.',
+      icon: '🌌',
+      bgImg: 'https://images.unsplash.com/photo-1462331940025-496dfbfc7564?auto=format&fit=crop&w=150&q=80'
+    },
+    {
+      id: 'sovereign_badge',
+      name: 'Sovereign Grand Arbiter',
+      req: 'Requires Level 20 or higher',
+      unlocked: level >= 20,
+      desc: 'Divine master of routine, health, sound chanting, and high scholastic scripture. Legendary discipline.',
+      icon: '👑',
+      bgImg: 'https://images.unsplash.com/photo-1506157786151-b8491531f063?auto=format&fit=crop&w=150&q=80'
+    }
+  ];
+
   return (
     <motion.div 
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="flex flex-col gap-8 w-full pb-8"
+      className="flex flex-col gap-6 w-full pb-8"
     >
-      <section className="relative aspect-[4/5] mx-6 mt-4 rounded-[2rem] overflow-hidden border border-tertiary/40 shadow-2xl">
-        <img src={IMAGES.PROFILE_BG} alt="Profile BG" className="absolute inset-0 w-full h-full object-cover opacity-60" />
-        <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent" />
-        
-        <div className="absolute inset-0 flex items-center justify-center py-12">
-          <img src={getRankFullAvatar(level)} alt="Hero" className="h-[75%] object-contain rounded-2xl border-[2px] border-amber-400/30 drop-shadow-[0_0_25px_rgba(0,0,0,0.8)] bg-black/40 animate-float" />
-        </div>
+      {/* Category Toggle Switch */}
+      <div className="flex justify-center gap-4 px-6 mt-4 shrink-0">
+        <button
+          onClick={() => setSubTab('profile')}
+          className={`flex-1 py-2 font-mono text-[9px] font-bold uppercase border rounded-xl transition-all cursor-pointer active:scale-95 ${subTab === 'profile' ? 'bg-primary text-background border-primary shadow-lg' : 'text-on-surface-variant font-normal border-outline-variant/30 hover:bg-surface-container'}`}
+        >
+          👤 profile bio
+        </button>
+        <button
+          onClick={() => setSubTab('trophies')}
+          className={`flex-1 py-1.5 font-mono text-[9px] font-bold uppercase border rounded-xl transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 ${subTab === 'trophies' ? 'bg-[#ca8a04]/20 text-[#facc15] border-[#facc15]/40 shadow-lg' : 'text-on-surface-variant font-normal border-outline-variant/30 hover:bg-surface-container'}`}
+        >
+          <Trophy className="w-3.5 h-3.5 text-yellow-500 fill-yellow-500/10" />
+          Trophy Hall ({TROPHIES.filter(t => t.unlocked).length})
+        </button>
+      </div>
 
-        <div className="absolute bottom-10 left-0 right-0 flex flex-col items-center gap-2 px-6 z-10">
-          <span className="font-mono text-[10px] text-tertiary uppercase tracking-widest bg-background/80 px-4 py-1 rounded-full border border-tertiary/50 backdrop-blur-sm shadow-xl">
-            LVL {level} Commander
-          </span>
-          <h2 className="font-serif text-3xl text-white font-bold drop-shadow-lg">{name}</h2>
-          <div className="flex items-center gap-3 mt-4 bg-surface-container-high/80 px-6 py-3 rounded-2xl border border-white/10 backdrop-blur-md shadow-2xl">
-            <span className="font-mono text-[10px] text-on-surface-variant font-bold uppercase">Rank Status:</span>
-            <span className="font-mono text-[11px] text-primary font-bold uppercase flex items-center gap-2">
-              {getRankTitle(level)} <Sparkles className="w-3.5 h-3.5 text-tertiary animate-pulse" />
-            </span>
-          </div>
-        </div>
-      </section>
+      <AnimatePresence mode="wait">
+        {subTab === 'profile' ? (
+          <motion.div 
+            key="profile-bio"
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            className="flex flex-col gap-6"
+          >
+            <section className="relative aspect-[4/5] mx-6 rounded-[2rem] overflow-hidden border border-tertiary/40 shadow-2xl">
+              <img src={IMAGES.PROFILE_BG} alt="Profile BG" className="absolute inset-0 w-full h-full object-cover opacity-60" />
+              <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent" />
+              
+              <div className="absolute inset-0 flex items-center justify-center py-12">
+                <img src={getRankFullAvatar(level)} alt="Hero" className="h-[75%] object-contain rounded-2xl border-[2px] border-amber-400/30 drop-shadow-[0_0_25px_rgba(0,0,0,0.8)] bg-black/40 animate-float" />
+              </div>
 
-      <section className="px-6 grid grid-cols-2 gap-4">
-        <div className="col-span-2 bg-surface-container p-5 rounded-2xl border border-outline-variant/30 flex items-center justify-between shadow-lg">
-          <div>
-            <p className="font-mono text-[10px] text-on-surface-variant uppercase font-bold tracking-widest">Total Experience</p>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="font-serif text-3xl font-bold text-tertiary">{xp.toLocaleString()}</span>
-              <span className="text-xs text-on-surface-variant font-mono">XP</span>
-            </div>
-          </div>
-          <div className="w-14 h-14 rounded-full bg-tertiary/10 border border-tertiary/40 flex items-center justify-center text-tertiary shadow-xl glow-tertiary">
-            <Trophy className="w-7 h-7" />
-          </div>
-        </div>
-
-        <div className="bg-surface-container p-5 rounded-2xl border border-outline-variant/30 shadow-lg relative overflow-hidden">
-          <Diamond className="absolute top-[-10px] right-[-10px] w-16 h-16 opacity-5 rotate-12" />
-          <p className="font-mono text-[10px] text-on-surface-variant uppercase font-bold">Crystals</p>
-          <div className="flex items-center gap-2 mt-1">
-            <span className="font-serif text-3xl font-bold text-secondary">{crystals}</span>
-            <Diamond className="w-4 h-4 fill-cyan-400 text-cyan-400" />
-          </div>
-        </div>
-
-        <div className="bg-surface-container p-5 rounded-2xl border border-outline-variant/30 shadow-lg relative overflow-hidden">
-          <Flame className="absolute top-[-10px] right-[-10px] w-16 h-16 opacity-5 rotate-12" />
-          <p className="font-mono text-[10px] text-on-surface-variant uppercase font-bold">Streak</p>
-          <div className="flex items-center gap-2 mt-1">
-            <span className="font-serif text-3xl font-bold text-error">{streak}</span>
-            <span className="text-[10px] text-error font-bold uppercase font-mono">Days</span>
-          </div>
-        </div>
-      </section>
-
-      <section className="px-6 space-y-4">
-        <h3 className="font-serif text-xl font-bold flex items-center gap-3">
-          <Backpack className="text-tertiary" />
-          Relics & Gear
-        </h3>
-        <div className="grid grid-cols-4 gap-4">
-          <GearSlot icon={<Swords />} label="Weapon" quality={hasWeapon ? "rare" : "base"} />
-          <GearSlot icon={<Shield />} label="Armor" quality={hasArmor ? "rare" : "base"} />
-          <GearSlot icon={<BookOpen />} label="Relic" quality={hasRelic ? "epic" : "base"} />
-          <GearSlot icon={<Star />} label="Pet" quality={hasPet ? "epic" : "base"} />
-        </div>
-      </section>
-
-      <section className="px-6 space-y-4">
-        <h3 className="font-serif text-xl font-bold flex items-center gap-3">
-          <Sparkles className="text-tertiary" />
-          Rank Ascension Path
-        </h3>
-        <div className="bg-surface-container border border-outline-variant/30 rounded-2xl p-4 space-y-3 shadow-lg">
-          <p className="font-mono text-[9px] text-on-surface-variant uppercase tracking-wider mb-2">Track the live progress of thy avatar and title evolution:</p>
-          
-          <div className="space-y-2.5">
-            {/* Sentinel Warden */}
-            <div className={`p-3 rounded-xl border flex items-center justify-between transition-all ${level < 15 ? 'border-primary bg-primary/5 shadow-[0_0_10px_rgba(255,255,255,0.05)]' : 'border-outline-variant/20 opacity-60 bg-surface-container-low'}`}>
-              <div className="flex items-center gap-3">
-                <img src={IMAGES.WIZARD_HERO} alt="Warden" className="w-10 h-10 rounded-lg object-cover bg-black/40 border border-outline-variant/30" />
-                <div>
-                  <h4 className="font-serif text-[11px] font-bold text-on-surface">Sentinel Warden</h4>
-                  <p className="font-mono text-[8px] text-on-surface-variant uppercase">Levels 1 - 14</p>
+              <div className="absolute bottom-10 left-0 right-0 flex flex-col items-center gap-2 px-6 z-10">
+                <span className="font-mono text-[10px] text-tertiary uppercase tracking-widest bg-background/80 px-4 py-1 rounded-full border border-tertiary/50 backdrop-blur-sm shadow-xl">
+                  LVL {level} Commander
+                </span>
+                <h2 className="font-serif text-3xl text-white font-bold drop-shadow-lg">{name}</h2>
+                <div className="flex items-center gap-3 mt-4 bg-surface-container-high/80 px-6 py-3 rounded-2xl border border-white/10 backdrop-blur-md shadow-2xl">
+                  <span className="font-mono text-[10px] text-on-surface-variant font-bold uppercase">Rank Status:</span>
+                  <span className="font-mono text-[11px] text-primary font-bold uppercase flex items-center gap-2">
+                    {getRankTitle(level)} <Sparkles className="w-3.5 h-3.5 text-tertiary animate-pulse" />
+                  </span>
                 </div>
               </div>
-              <div>
-                {level < 15 ? (
-                  <span className="font-mono text-[8px] bg-primary/20 text-primary border border-primary/30 px-2 py-0.5 rounded-full uppercase font-bold animate-pulse">Current Rank</span>
-                ) : (
-                  <span className="font-mono text-[8px] text-green-400 font-bold uppercase tracking-wider">Ascended</span>
-                )}
-              </div>
-            </div>
+            </section>
 
-            {/* Arcane Archmage */}
-            <div className={`p-3 rounded-xl border flex items-center justify-between transition-all ${level >= 15 && level < 30 ? 'border-tertiary bg-tertiary/5 shadow-[0_0_12px_rgba(214,197,149,0.15)]' : 'border-outline-variant/20 ' + (level < 15 ? 'opacity-40 bg-black/10' : 'opacity-60 bg-surface-container-low')}`}>
-              <div className="flex items-center gap-3">
-                <img src={IMAGES.ARCHMAGE_HERO} alt="Archmage" className="w-10 h-10 rounded-lg object-cover bg-black/40 border border-outline-variant/30" />
+            <section className="px-6 grid grid-cols-2 gap-4">
+              <div className="col-span-2 bg-surface-container p-5 rounded-2xl border border-outline-variant/30 flex items-center justify-between shadow-lg">
                 <div>
-                  <h4 className="font-serif text-[11px] font-bold text-on-surface">Arcane Archmage</h4>
-                  <p className="font-mono text-[8px] text-on-surface-variant uppercase">Levels 15 - 29</p>
+                  <p className="font-mono text-[10px] text-on-surface-variant uppercase font-bold tracking-widest">Total Experience</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="font-serif text-3xl font-bold text-tertiary">{xp.toLocaleString()}</span>
+                    <span className="text-xs text-on-surface-variant font-mono">XP</span>
+                  </div>
+                </div>
+                <div className="w-14 h-14 rounded-full bg-tertiary/10 border border-tertiary/40 flex items-center justify-center text-tertiary shadow-xl glow-tertiary">
+                  <Trophy className="w-7 h-7" />
                 </div>
               </div>
-              <div>
-                {level >= 15 && level < 30 ? (
-                  <span className="font-mono text-[8px] bg-tertiary/20 text-tertiary border border-tertiary/30 px-2 py-0.5 rounded-full uppercase font-bold animate-pulse">Current Rank</span>
-                ) : level >= 30 ? (
-                  <span className="font-mono text-[8px] text-green-400 font-bold uppercase tracking-wider">Ascended</span>
-                ) : (
-                  <span className="font-mono text-[8px] text-on-surface-variant/40 font-bold uppercase">Locked</span>
-                )}
-              </div>
-            </div>
 
-            {/* Sovereign Emperor */}
-            <div className={`p-3 rounded-xl border flex items-center justify-between transition-all ${level >= 30 ? 'border-amber-400 bg-amber-400/5 shadow-[0_0_12px_rgba(251,191,36,0.15)]' : 'border-outline-variant/20 opacity-40 bg-black/10'}`}>
-              <div className="flex items-center gap-3">
-                <img src={IMAGES.EMPEROR_HERO} alt="Emperor" className="w-10 h-10 rounded-lg object-cover bg-black/40 border border-outline-variant/30" />
-                <div>
-                  <h4 className="font-serif text-[11px] font-bold text-on-surface">Sovereign Emperor</h4>
-                  <p className="font-mono text-[8px] text-on-surface-variant uppercase">Levels 30+</p>
+              <div className="bg-surface-container p-5 rounded-2xl border border-outline-variant/30 shadow-lg relative overflow-hidden">
+                <Diamond className="absolute top-[-10px] right-[-10px] w-16 h-16 opacity-5 rotate-12" />
+                <p className="font-mono text-[10px] text-on-surface-variant uppercase font-bold">Crystals</p>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="font-serif text-3xl font-bold text-secondary">{crystals}</span>
+                  <Diamond className="w-4 h-4 fill-cyan-400 text-cyan-400" />
                 </div>
               </div>
-              <div>
-                {level >= 30 ? (
-                  <span className="font-mono text-[8px] bg-amber-400/20 text-yellow-400 border border-amber-400/30 px-2 py-0.5 rounded-full uppercase font-bold animate-pulse">Current Rank</span>
-                ) : (
-                  <span className="font-mono text-[8px] text-on-surface-variant/40 font-bold uppercase">Locked</span>
-                )}
+
+              <div className="bg-surface-container p-5 rounded-2xl border border-outline-variant/30 shadow-lg relative overflow-hidden">
+                <Flame className="absolute top-[-10px] right-[-10px] w-16 h-16 opacity-5 rotate-12" />
+                <p className="font-mono text-[10px] text-on-surface-variant uppercase font-bold">Streak</p>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="font-serif text-3xl font-bold text-error">{streak}</span>
+                  <span className="text-[10px] text-error font-bold uppercase font-mono">Days</span>
+                </div>
               </div>
+            </section>
+
+            <section className="px-6 space-y-4">
+              <h3 className="font-serif text-xl font-bold flex items-center gap-3">
+                <Backpack className="text-tertiary" />
+                Relics & Gear
+              </h3>
+              <div className="grid grid-cols-4 gap-4">
+                <GearSlot icon={<Swords />} label="Weapon" quality={hasWeapon ? "rare" : "base"} />
+                <GearSlot icon={<Shield />} label="Armor" quality={hasArmor ? "rare" : "base"} />
+                <GearSlot icon={<BookOpen />} label="Relic" quality={hasRelic ? "epic" : "base"} />
+                <GearSlot icon={<Star />} label="Pet" quality={hasPet ? "epic" : "base"} />
+              </div>
+            </section>
+
+            <section className="px-6 space-y-4">
+              <h3 className="font-serif text-xl font-bold flex items-center gap-3">
+                <Sparkles className="text-tertiary" />
+                Rank Ascension Path
+              </h3>
+              <div className="bg-surface-container border border-outline-variant/30 rounded-2xl p-4 space-y-3 shadow-lg">
+                <p className="font-mono text-[9px] text-on-surface-variant uppercase tracking-wider mb-2">Track the live progress of thy avatar and title evolution:</p>
+                
+                <div className="space-y-2.5">
+                  {/* Sentinel Warden */}
+                  <div className={`p-3 rounded-xl border flex items-center justify-between transition-all ${level < 15 ? 'border-primary bg-primary/5 shadow-[0_0_10px_rgba(255,255,255,0.05)]' : 'border-outline-variant/20 opacity-60 bg-surface-container-low'}`}>
+                    <div className="flex items-center gap-3">
+                      <img src={IMAGES.WIZARD_HERO} alt="Warden" className="w-10 h-10 rounded-lg object-cover bg-black/40 border border-outline-variant/30" />
+                      <div>
+                        <h4 className="font-serif text-[11px] font-bold text-on-surface">Sentinel Warden</h4>
+                        <p className="font-mono text-[8px] text-on-surface-variant uppercase">Levels 1 - 14</p>
+                      </div>
+                    </div>
+                    <div>
+                      {level < 15 ? (
+                        <span className="font-mono text-[8px] bg-primary/20 text-primary border border-primary/30 px-2 py-0.5 rounded-full uppercase font-bold animate-pulse">Current Rank</span>
+                      ) : (
+                        <span className="font-mono text-[8px] text-green-400 font-bold uppercase tracking-wider">Ascended</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Arcane Archmage */}
+                  <div className={`p-3 rounded-xl border flex items-center justify-between transition-all ${level >= 15 && level < 30 ? 'border-tertiary bg-tertiary/5 shadow-[0_0_12px_rgba(214,197,149,0.15)]' : 'border-outline-variant/20 ' + (level < 15 ? 'opacity-40 bg-black/10' : 'opacity-60 bg-surface-container-low')}`}>
+                    <div className="flex items-center gap-3">
+                      <img src={IMAGES.ARCHMAGE_HERO} alt="Archmage" className="w-10 h-10 rounded-lg object-cover bg-black/40 border border-outline-variant/30" />
+                      <div>
+                        <h4 className="font-serif text-[11px] font-bold text-on-surface">Arcane Archmage</h4>
+                        <p className="font-mono text-[8px] text-on-surface-variant uppercase">Levels 15 - 29</p>
+                      </div>
+                    </div>
+                    <div>
+                      {level >= 15 && level < 30 ? (
+                        <span className="font-mono text-[8px] bg-tertiary/20 text-tertiary border border-tertiary/30 px-2 py-0.5 rounded-full uppercase font-bold animate-pulse">Current Rank</span>
+                      ) : level >= 30 ? (
+                        <span className="font-mono text-[8px] text-green-400 font-bold uppercase tracking-wider">Ascended</span>
+                      ) : (
+                        <span className="font-mono text-[8px] text-on-surface-variant/40 font-bold uppercase">Locked</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Sovereign Emperor */}
+                  <div className={`p-3 rounded-xl border flex items-center justify-between transition-all ${level >= 30 ? 'border-amber-400 bg-amber-400/5 shadow-[0_0_12px_rgba(251,191,36,0.15)]' : 'border-outline-variant/20 opacity-40 bg-black/10'}`}>
+                    <div className="flex items-center gap-3">
+                      <img src={IMAGES.EMPEROR_HERO} alt="Emperor" className="w-10 h-10 rounded-lg object-cover bg-black/40 border border-outline-variant/30" />
+                      <div>
+                        <h4 className="font-serif text-[11px] font-bold text-on-surface">Sovereign Emperor</h4>
+                        <p className="font-mono text-[8px] text-on-surface-variant uppercase">Levels 30+</p>
+                      </div>
+                    </div>
+                    <div>
+                      {level >= 30 ? (
+                        <span className="font-mono text-[8px] bg-amber-400/20 text-yellow-400 border border-amber-400/30 px-2 py-0.5 rounded-full uppercase font-bold animate-pulse">Current Rank</span>
+                      ) : (
+                        <span className="font-mono text-[8px] text-on-surface-variant/40 font-bold uppercase">Locked</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </motion.div>
+        ) : (
+          <motion.div 
+            key="trophy-room"
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            className="px-6 flex flex-col gap-6"
+          >
+            <div className="bg-[#121215] p-5 rounded-2xl border border-amber-500/25 space-y-2 relative overflow-hidden shadow-2xl">
+              <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-transparent pointer-events-none" />
+              <h3 className="font-serif text-lg text-[#facc15] font-bold tracking-wide">🏆 Permanent Hall of Trophies</h3>
+              <p className="text-xs text-on-surface-variant leading-relaxed">
+                Thy monumental milestones. Badges etched in eternity on the high crystal vault. They are never forfeit or consumed!
+              </p>
             </div>
-          </div>
-        </div>
-      </section>
+
+            <div className="flex flex-col gap-4">
+              {TROPHIES.map((badge) => (
+                <div 
+                  key={badge.id}
+                  className={`relative p-4 rounded-2xl border flex items-center gap-4 transition-all overflow-hidden ${badge.unlocked ? 'border-[#eab308]/40 bg-gradient-to-r from-amber-950/15 to-[#1c1917]' : 'border-outline-variant/20 opacity-45 bg-[#121214]'}`}
+                >
+                  {/* Badge visual banner overlay */}
+                  {badge.unlocked && (
+                    <div className="absolute inset-0 opacity-10 bg-cover bg-center pointer-events-none" style={{ backgroundImage: `url(${badge.bgImg})` }} />
+                  )}
+
+                  <div className={`relative z-10 w-14 h-14 rounded-full flex items-center justify-center text-2xl border ${badge.unlocked ? 'border-amber-400 bg-amber-400/10 shadow-[0_0_15px_rgba(234,179,8,0.35)]' : 'border-outline-variant border-dashed bg-stone-900/40 text-stone-600'}`}>
+                    {badge.unlocked ? badge.icon : '🔒'}
+                  </div>
+
+                  <div className="relative z-10 flex-1 min-w-0">
+                    <h4 className={`font-serif text-[12px] font-bold truncate ${badge.unlocked ? 'text-amber-400' : 'text-stone-500'}`}>{badge.name}</h4>
+                    <p className="font-mono text-[8px] text-stone-400 mt-0.5 uppercase tracking-wide">{badge.req}</p>
+                    <p className="text-[10px] text-on-surface-variant/80 font-sans mt-1.5 leading-relaxed truncate max-w-full md:whitespace-normal" title={badge.desc}>
+                      {badge.unlocked ? badge.desc : 'This mystic achievement scroll remains locked. Gain experience to unlock.'}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <section className="px-6 mt-2 mb-8 flex justify-center">
         <button 

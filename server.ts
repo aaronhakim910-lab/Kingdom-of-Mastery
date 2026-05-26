@@ -123,6 +123,83 @@ app.post("/api/oracle", async (req, res) => {
   }
 });
 
+app.post("/api/verify-journal", async (req, res) => {
+  try {
+    const { journalText } = req.body;
+    if (!journalText || typeof journalText !== "string" || !journalText.trim()) {
+      return res.status(400).json({ error: "Thy journal reflection is blank, traveler! Speak thy thoughts." });
+    }
+
+    const systemInstruction = `You are the Royal Grand Scholar, an ancient scribe evaluating of the traveler's daily mindfulness log. 
+    Evaluate their writing and return:
+    1. A reflection grade from D to S-Tier (e.g. S, A, B, C, D) based on depth and focus.
+    2. A brief, wise fantasy commentary encouraging their habits.
+    3. An RPG name for a 'focus scroll' matching their topic.
+    Keep your response short and elegant, under 100 words. Format strictly as JSON with the key structure: { "grade": string, "comment": string, "scrollTitle": string }`;
+
+    const userPrompt = `The traveler's journal reflection: "${journalText}"`;
+
+    if (process.env.GEMINI_API_KEY) {
+      console.log("Journal grading routed via Gemini API...");
+      const ai = new GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build",
+          },
+        },
+      });
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: userPrompt,
+        config: {
+          systemInstruction: systemInstruction,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              grade: {
+                type: Type.STRING,
+                description: "The evaluation grade: D, C, B, A, or S",
+              },
+              comment: {
+                type: Type.STRING,
+                description: "Wise medieval scholar commentary",
+              },
+              scrollTitle: {
+                type: Type.STRING,
+                description: "Imaginary medieval scroll focus name (e.g., 'Scroll of Celestial Time')",
+              },
+            },
+            required: ["grade", "comment", "scrollTitle"],
+          },
+        },
+      });
+
+      const contentText = response.text || "";
+      const jsonMatch = contentText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+         const parsed = JSON.parse(jsonMatch[0]);
+         return res.json(parsed);
+      } else {
+         const parsed = JSON.parse(contentText);
+         return res.json(parsed);
+      }
+    }
+
+    // Default static mock if API key isn't active
+    return res.json({
+      grade: "A-Tier",
+      comment: "A magnificent declaration, traveler! Thy focus shines bright in the halls of mastery.",
+      scrollTitle: "Scroll of Mindful Clarity"
+    });
+  } catch (err) {
+    console.error("Journal grading failure:", err);
+    return res.status(500).json({ error: "The Grand Scholar's sight is temporarily blurred." });
+  }
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
